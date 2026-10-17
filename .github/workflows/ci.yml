@@ -1,0 +1,48 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev pkg-config
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      # The lock must refuse a wrong password, refuse Escape, and accept the
+      # right one. That is the whole security contract, so it is tested in a
+      # real X server against real PAM.
+      - name: Lock behaviour in a real X session
+        run: |
+          sudo apt-get install -y xvfb x11-utils x11-apps x11-xserver-utils xdotool fonts-dejavu-core procps libpam-modules passwd util-linux
+          cargo build --release --locked
+          sudo useradd -m -s /bin/sh tester || true
+          echo 'tester:secret123' | sudo chpasswd
+          sudo install -d -o tester -g tester /home/tester/bin /home/tester/.config/niruui
+          sudo install -o tester -g tester -m 755 target/release/nirulock /home/tester/bin/nirulock
+          cat > /tmp/lock-test.sh <<'INNER'
+          cd /home/tester
+          export HOME=/home/tester DISPLAY=:90
+          Xvfb :90 -screen 0 800x600x24 -nolisten tcp &
+          sleep 1.5
+          ./bin/nirulock > lock.log 2>&1 &
+          L=$!
+          sleep 2.5
+          kill -0 $L 2>/dev/null || { echo "FAIL lock exited"; cat lock.log; exit 1; }
+          xdotool type --delay 20 "wrongpass"; xdotool key Return; sleep 2.5
+          kill -0 $L 2>/dev/null && echo "OK   wrong password keeps it locked" || { echo "FAIL unlocked on wrong password"; exit 1; }
+          xdotool key Escape; sleep 0.5
+          kill -0 $L 2>/dev/null && echo "OK   escape keeps it locked" || { echo "FAIL unlocked on escape"; exit 1; }
+          xdotool type --delay 20 "secret123"; xdotool key Return; sleep 2.5
+          kill -0 $L 2>/dev/null && { echo "FAIL correct password did not unlock"; cat lock.log; exit 1; } || echo "OK   correct password unlocks"
+          INNER
+          sudo -u tester sh /tmp/lock-test.sh
+      - name: Shellcheck
+        run: |
+          docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
+            -S warning -s sh -e SC1007 /src/install.sh

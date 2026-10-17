@@ -1,0 +1,46 @@
+name: Release
+
+# NIRULOCK is linked against the system libpam, so it is a glibc dynamic
+# binary rather than a static one: PAM loads modules and reads /etc/pam.d and
+# cannot do that from a static musl binary. It still needs no Rust to install.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev pkg-config
+      - run: cargo build --release --locked
+      # Build on the oldest supported Ubuntu so the glibc requirement stays
+      # low enough for Debian 12 and current Arch and Void.
+      - name: Record the glibc requirement
+        run: |
+          objdump -T target/release/nirulock | grep -o 'GLIBC_[0-9.]*' | sort -u | tail -5
+      - name: Smoke test in a real X session
+        run: |
+          sudo apt-get install -y xvfb x11-utils x11-xserver-utils fonts-dejavu-core procps
+          target/release/nirulock --version
+          Xvfb :92 -screen 0 800x600x24 -nolisten tcp & sleep 1
+          DISPLAY=:92 target/release/nirulock & pid=$!
+          sleep 2
+          kill -0 $pid || { echo "::error::nirulock exited"; exit 1; }
+          kill $pid
+      - run: |
+          mkdir -p dist
+          cp target/release/nirulock dist/
+          cd dist && sha256sum nirulock > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.0' }}
+          files: |
+            dist/nirulock
+            dist/SHA256SUMS
+          generate_release_notes: true
