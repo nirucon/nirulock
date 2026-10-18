@@ -124,9 +124,9 @@ impl Lock {
         lock.wm_notified = true;
         // Above everything from the first frame: the bar and any
         // override-redirect window are already on screen when a lock starts.
+        lock.grab_input()?;
         lock.keep_on_top()?;
         lock.draw()?;
-        lock.grab_input()?;
         Ok(lock)
     }
 

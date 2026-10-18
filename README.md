@@ -97,7 +97,7 @@ In a NIRUPI session, `slock` is used instead.
 
 ## Status
 
-Version 0.16.4. Built and tested on Arch, Debian and Void.
+Version 0.16.5. Built and tested on Arch, Debian and Void.
 
 Part of a personal desktop for the author's own use; others are welcome to try it.
 [Roadmap](https://github.com/nirucon/nirux/blob/main/ROADMAP.md).
@@ -105,7 +105,8 @@ Part of a personal desktop for the author's own use; others are welcome to try i
 What it does when something goes wrong, since a lock screen cannot show a
 terminal:
 
-- Active grab replies are checked; an unacquired keyboard is a startup failure.
+- Active grab replies are checked; the password surface stays hidden until input
+  is acquired. An unacquired keyboard is a startup failure.
 - Keys the lock screen takes are announced to X11's idle clock, so an idle
   timer does not lock the screen again a moment after the password.
 - A wrong password retains the input grab continuously for the next attempt.

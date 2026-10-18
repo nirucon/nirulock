@@ -17,6 +17,75 @@ impl Drop for Running {
 }
 
 #[test]
+#[ignore = "requires isolated X server and font"]
+fn failed_keyboard_grab_never_displays_a_password_prompt() {
+    let (connection, screen) = x11rb::connect(None).unwrap();
+    let root = connection.setup().roots[screen].root;
+    assert_eq!(
+        connection
+            .grab_keyboard(
+                false,
+                root,
+                x11rb::CURRENT_TIME,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC
+            )
+            .unwrap()
+            .reply()
+            .unwrap()
+            .status,
+        GrabStatus::SUCCESS
+    );
+    let name = connection
+        .intern_atom(false, b"_NET_WM_NAME")
+        .unwrap()
+        .reply()
+        .unwrap()
+        .atom;
+    let mut lock = Running(
+        Command::new(env!("CARGO_BIN_EXE_nirulock"))
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    thread::sleep(Duration::from_millis(400));
+    for window in connection
+        .query_tree(root)
+        .unwrap()
+        .reply()
+        .unwrap()
+        .children
+    {
+        let title = connection
+            .get_property(false, window, name, AtomEnum::ANY, 0, 128)
+            .unwrap()
+            .reply()
+            .unwrap();
+        if title.value == b"NIRULOCK" {
+            assert_eq!(
+                connection
+                    .get_window_attributes(window)
+                    .unwrap()
+                    .reply()
+                    .unwrap()
+                    .map_state,
+                MapState::UNMAPPED,
+                "password prompt became visible before keyboard was acquired"
+            );
+        }
+    }
+    thread::sleep(Duration::from_secs(2));
+    assert!(!lock
+        .0
+        .try_wait()
+        .unwrap()
+        .expect("failed grab did not terminate startup")
+        .success());
+    connection.ungrab_keyboard(x11rb::CURRENT_TIME).unwrap();
+    connection.flush().unwrap();
+}
+
+#[test]
 #[ignore = "requires isolated X server, font and xdotool"]
 fn timeout_cannot_unlock_and_rejected_input_stays_isolated() {
     let directory = std::env::temp_dir().join(format!("nirulock-x11-{}", std::process::id()));

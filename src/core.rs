@@ -306,7 +306,7 @@ impl Surface {
             c.intern_atom(false, b"UTF8_STRING")?.reply()?.atom,
             name.as_bytes(),
         )?;
-        c.map_window(win)?;
+        // Keep the surface hidden until the caller has acquired input.
         // Hide the pointer.
         //
         // A glyph cursor still draws a 1x1 pixel, which looked like a small
