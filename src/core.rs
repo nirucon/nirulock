@@ -218,15 +218,15 @@ pub fn clock_text(now: chrono::DateTime<chrono::Local>) -> String {
     format!("{}  {}", now.format("%Y-%m-%d"), now.format("%H:%M"))
 }
 
-/// "away for 1 h 04 min" style text for the idle counter.
+/// "afk 1 h 04 min" style text for the time away from the keyboard.
 pub fn away_text(seconds: u64) -> String {
     let minutes = seconds / 60;
     let hours = minutes / 60;
     let rest = minutes % 60;
     if hours == 0 {
-        format!("away for {rest} min")
+        format!("afk {rest} min")
     } else {
-        format!("away for {hours} h {rest:02} min")
+        format!("afk {hours} h {rest:02} min")
     }
 }
 
@@ -282,14 +282,18 @@ impl Surface {
             name.as_bytes(),
         )?;
         c.map_window(win)?;
-        // Take the cursor away: a pointer over the lock screen is noise.
+        // Hide the pointer.
+        //
+        // A glyph cursor still draws a 1x1 pixel, which looked like a small
+        // cross on the lock screen. A pixmap cursor built from a 1x1 pixmap
+        // that was never drawn is fully transparent, so the pointer disappears
+        // while the keyboard grab keeps it from doing anything.
         let blank = c.generate_id()?;
-        let font = c.generate_id()?;
-        c.open_font(font, b"cursor")?;
-        // A transparent 1x1 cursor hides the pointer.
-        c.create_glyph_cursor(blank, font, font, 0, 0, 1, 1, 0, 0, 0, 0)?;
+        let shape = c.generate_id()?;
+        c.create_pixmap(1, shape, screen.root, 1, 1)?;
+        c.create_cursor(blank, shape, shape, 0, 0, 0, 0, 0, 0, 0, 0)?;
         c.change_window_attributes(win, &ChangeWindowAttributesAux::new().cursor(blank))?;
-        c.close_font(font)?;
+        c.free_cursor(blank)?;
         c.flush()?;
         Ok(Self {
             c,
@@ -379,11 +383,11 @@ mod tests {
 
     #[test]
     fn away_text_formats_hours_and_minutes() {
-        assert_eq!(away_text(0), "away for 0 min");
-        assert_eq!(away_text(59), "away for 0 min");
-        assert_eq!(away_text(12 * 60), "away for 12 min");
-        assert_eq!(away_text(64 * 60), "away for 1 h 04 min");
-        assert_eq!(away_text(3 * 3600 + 5 * 60), "away for 3 h 05 min");
+        assert_eq!(away_text(0), "afk 0 min");
+        assert_eq!(away_text(59), "afk 0 min");
+        assert_eq!(away_text(12 * 60), "afk 12 min");
+        assert_eq!(away_text(64 * 60), "afk 1 h 04 min");
+        assert_eq!(away_text(3 * 3600 + 5 * 60), "afk 3 h 05 min");
     }
 
     #[test]

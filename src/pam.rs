@@ -203,9 +203,8 @@ mod tests {
     fn wrong_password_never_authenticates() {
         // The contract: a wrong password must not unlock, and a missing PAM
         // must be an error rather than a success.
-        match authenticate("nirulock-no-such-user", "definitely-wrong") {
-            Ok(ok) => assert!(!ok),
-            Err(_) => {}
+        if let Ok(ok) = authenticate("nirulock-no-such-user", "definitely-wrong") {
+            assert!(!ok);
         }
     }
 
