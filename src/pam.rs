@@ -57,7 +57,6 @@ struct PamHandle {
     _private: [u8; 0],
 }
 
-
 extern "C" {
     fn pam_start(
         service: *const c_char,
@@ -128,6 +127,7 @@ unsafe extern "C" fn conversation(
 }
 
 /// The account to authenticate: the owner of this session.
+#[allow(dead_code)] // used by the lock screen binary only
 pub fn current_user() -> String {
     if let Ok(u) = std::env::var("USER") {
         if !u.is_empty() {
@@ -152,14 +152,27 @@ pub fn authenticate(user: &str, password: &str) -> Result<bool, String> {
         // One authentication at a time: the conversation callback reads a
         // process-wide password.
         let _guard = PAM_LOCK.lock().map_err(|_| "PAM state poisoned")?;
-        let service = CString::new("login").unwrap();
         let cuser = CString::new(user).map_err(|_| "invalid user name")?;
         let conv = PamConv {
             conv: Some(conversation),
             appdata_ptr: std::ptr::null_mut(),
         };
+        // Prefer the dedicated `nirulock` service the installer provides.
+        // It uses the authentication stack only; `login` on Void additionally
+        // requires a shell in /etc/shells and refuses when /etc/nologin
+        // exists, which made a locked screen impossible to unlock. `login`
+        // stays as a fallback so a missing service file never locks the user
+        // out of their own session.
         let mut handle: *mut PamHandle = std::ptr::null_mut();
-        let rc = unsafe { pam_start(service.as_ptr(), cuser.as_ptr(), &conv, &mut handle) };
+        let mut rc = PAM_SUCCESS;
+        for service in ["nirulock", "login"] {
+            let svc = CString::new(service).unwrap();
+            rc = unsafe { pam_start(svc.as_ptr(), cuser.as_ptr(), &conv, &mut handle) };
+            if rc == PAM_SUCCESS && !handle.is_null() {
+                break;
+            }
+            handle = std::ptr::null_mut();
+        }
         if rc != PAM_SUCCESS || handle.is_null() {
             Err(format!("PAM could not start (error {rc})"))
         } else {

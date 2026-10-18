@@ -86,6 +86,7 @@ install_release() {
   [ "$expected" = "$actual" ] || die "checksum mismatch for $BIN"
   chmod 0755 "$dl/$BIN"
   put "$dl/$BIN" "$BINDIR/$BIN"
+  install_pam_service
   say "Installed $BIN $("$BINDIR/$BIN" --version | awk '{print $2}') in $BINDIR"
   say "Settings: $CONFDIR/lock.toml (created when you first edit it)"
   if ! ldconfig -p 2>/dev/null | grep -q libpam; then
@@ -115,17 +116,75 @@ build_local() {
   say "Building from source ..."
   ( cd "$(dirname "$0")" && cargo build --release --locked )
   put "target/release/$BIN" "$BINDIR/$BIN"
+  install_pam_service
   say "Installed $BIN $("$BINDIR/$BIN" --version | awk '{print $2}') in $BINDIR"
+}
+
+# Install the PAM service file. Without it, PAM falls back to `login`, which on
+# Void requires a shell in /etc/shells and refuses while /etc/nologin exists:
+# a locked screen that cannot be unlocked. This is the one system file Nirulock
+# needs, so it is installed with sudo and reported clearly.
+distro() {
+  if [ -f /etc/void-release ] || command -v xbps-install >/dev/null 2>&1; then
+    echo void
+  elif [ -f /etc/debian_version ]; then
+    echo debian
+  elif [ -f /etc/arch-release ] || command -v pacman >/dev/null 2>&1; then
+    echo arch
+  elif [ -r /etc/os-release ] && grep -qi '^ID_LIKE=.*\(debian\|arch\|void\)' /etc/os-release 2>/dev/null; then
+    # Derivatives answer to the family they build on.
+    if grep -qi void /etc/os-release; then echo void
+    elif grep -qi debian /etc/os-release; then echo debian
+    else echo arch; fi
+  else
+    echo unknown
+  fi
+}
+
+install_pam_service() {
+  d="$(distro)"
+  src="$(dirname "$0")/pam/$d/nirulock"
+  if [ ! -f "$src" ]; then
+    say "Note: no PAM service file for this distribution ($d)."
+    say "Nirulock will fall back to the 'login' service."
+    return 0
+  fi
+  dest=/etc/pam.d/nirulock
+  if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+    say "PAM service already installed: $dest"
+    return 0
+  fi
+  if [ -w /etc/pam.d ] 2>/dev/null; then
+    install -m 0644 "$src" "$dest"
+  elif command -v sudo >/dev/null 2>&1; then
+    say "Installing the PAM service to $dest (sudo):"
+    sudo install -m 0644 "$src" "$dest" || die "could not install $dest"
+  else
+    say "Warning: cannot write $dest and sudo is missing."
+    say "Install it yourself: copy pam/$d/nirulock to $dest"
+    return 0
+  fi
+  say "Installed the PAM service: $dest"
 }
 
 check() {
   ok=0
+  if [ -f /etc/pam.d/nirulock ]; then
+    say "OK   /etc/pam.d/nirulock"
+  else
+    say "WARN no /etc/pam.d/nirulock (falls back to the login service)"
+  fi
   if [ -x "$BINDIR/$BIN" ]; then say "OK   $BINDIR/$BIN"; else say "FAIL missing $BINDIR/$BIN"; ok=1; fi
   "$BINDIR/$BIN" --version || ok=1
   return "$ok"
 }
 
 uninstall() {
+  if [ -f /etc/pam.d/nirulock ]; then
+    if [ -w /etc/pam.d ]; then rm -f /etc/pam.d/nirulock
+    elif command -v sudo >/dev/null 2>&1; then sudo rm -f /etc/pam.d/nirulock; fi
+    say "Removed /etc/pam.d/nirulock"
+  fi
   [ -f "$MANIFEST" ] || { say "Nothing to remove."; return 0; }
   while IFS="$(printf '\t')" read -r path _hash; do
     [ -n "$path" ] || continue

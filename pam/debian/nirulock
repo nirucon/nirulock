@@ -1,0 +1,9 @@
+# PAM service for Nirulock (debian).
+#
+# A lock screen verifies a password for an account that is already logged in,
+# so it uses the authentication stack rather than the login stack. `login`
+# additionally requires a shell listed in /etc/shells (pam_shells) and checks
+# /etc/nologin: properties of starting a session, not of unlocking one.
+
+auth     include   common-auth
+account  include  common-account

@@ -229,7 +229,11 @@ impl Lock {
                 // Accepted: release the grabs so the session can continue.
                 self.surface.c.ungrab_keyboard(x11rb::CURRENT_TIME)?;
                 self.surface.c.ungrab_pointer(x11rb::CURRENT_TIME)?;
-                self.surface.c.ungrab_key(0, self.surface.c.setup().roots[self.surface.screen_num].root, ModMask::ANY)?;
+                self.surface.c.ungrab_key(
+                    0,
+                    self.surface.c.setup().roots[self.surface.screen_num].root,
+                    ModMask::ANY,
+                )?;
                 self.surface.c.destroy_window(self.surface.win)?;
                 self.surface.c.flush()?;
                 std::process::exit(0);
@@ -259,7 +263,7 @@ impl Lock {
 
     fn handle_key(&mut self, e: KeyPressEvent) -> Result<bool> {
         // Map the keycode to a printable character through the keyboard map.
-        let sym = self.keystring(e.detail)?;
+        let sym = self.keystring(e)?;
         match sym.as_str() {
             "\r" | "\n" => {
                 self.submit()?;
@@ -284,20 +288,54 @@ impl Lock {
         Ok(true)
     }
 
-    /// The first keysym for a keycode as a string, space for 0x20.
-    fn keystring(&self, code: u8) -> Result<String> {
-        let map = self
-            .surface
-            .c
-            .get_keyboard_mapping(code, 1)?
-            .reply()?;
+    /// Translate a key press into the character it produces.
+    ///
+    /// A keycode has several keysym levels: unshifted, shifted, AltGr and so
+    /// on. Reading only the first level made every capital letter and every
+    /// shifted symbol (on a Swedish layout `@`, `!`, `?`, `#`) impossible to
+    /// type, so a password containing one could never unlock the screen.
+    ///
+    /// Caps Lock is applied separately, as X does: it shifts letters but not
+    /// digits or punctuation.
+    fn keystring(&self, e: KeyPressEvent) -> Result<String> {
+        let map = self.surface.c.get_keyboard_mapping(e.detail, 1)?.reply()?;
         let syms = &map.keysyms;
-        let sym = syms.first().copied().unwrap_or(0);
+        let shift = e.state.contains(KeyButMask::SHIFT);
+        let lock = e.state.contains(KeyButMask::LOCK);
+        let altgr = e.state.contains(KeyButMask::MOD5);
+        let level = match (shift, altgr) {
+            (false, false) => 0,
+            (true, false) => 1,
+            (false, true) => 2,
+            (true, true) => 3,
+        };
+        let mut sym = syms
+            .get(level)
+            .or_else(|| syms.get(level % 2))
+            .or_else(|| syms.first())
+            .copied()
+            .unwrap_or(0);
+        // XK_ISO_Level3_Shift as a leftover: fall back to the unshifted level.
+        if sym == 0 || sym == 0xfe03 {
+            sym = syms.first().copied().unwrap_or(0);
+        }
+        // Caps Lock swaps the case of alphabetic keysyms only.
+        if lock {
+            if (0x61..=0x7a).contains(&sym) {
+                sym -= 0x20;
+            } else if (0x41..=0x5a).contains(&sym) {
+                sym += 0x20;
+            }
+        }
         Ok(match sym {
             0xff0d | 0xff8d => "\r".to_string(),
             0xff08 => "\u{8}".to_string(),
             0xff1b => "\u{1b}".to_string(),
+            0xff09 => "\t".to_string(),
             s if (0x20..0x7f).contains(&s) => char::from_u32(s).unwrap_or(' ').to_string(),
+            // Latin-1 keysyms map directly to their code point, which covers
+            // å ä ö and the other Swedish letters.
+            s if (0xa0..0x100).contains(&s) => char::from_u32(s).unwrap_or(' ').to_string(),
             _ => String::new(),
         })
     }

@@ -11,9 +11,7 @@
 
 use ab_glyph::{Font, ScaleFont};
 use x11rb::{
-    connection::Connection,
-    protocol::xproto::*,
-    rust_connection::RustConnection,
+    connection::Connection, protocol::xproto::*, rust_connection::RustConnection,
     wrapper::ConnectionExt as _,
 };
 
@@ -47,8 +45,8 @@ impl TextRenderer {
         setup: &x11rb::protocol::xproto::Setup,
     ) -> crate::Result<Self> {
         let bytes = std::fs::read(font_path)?;
-        let font = ab_glyph::FontArc::try_from_vec(bytes)
-            .map_err(|_| "cannot parse the font file")?;
+        let font =
+            ab_glyph::FontArc::try_from_vec(bytes).map_err(|_| "cannot parse the font file")?;
         let line_height = {
             let scaled = font.as_scaled(ab_glyph::PxScale::from(size));
             scaled.height().ceil() as i16
@@ -272,9 +270,7 @@ impl Surface {
                 // screen cannot be moved, resized or covered.
                 .override_redirect(1)
                 .background_pixel(0)
-                .event_mask(
-                    EventMask::EXPOSURE | EventMask::KEY_PRESS | EventMask::BUTTON_PRESS,
-                ),
+                .event_mask(EventMask::EXPOSURE | EventMask::KEY_PRESS | EventMask::BUTTON_PRESS),
         )?;
         c.create_gc(gc, win, &CreateGCAux::new())?;
         c.create_pixmap(depth, back, screen.root, width, height)?;
@@ -292,10 +288,7 @@ impl Surface {
         c.open_font(font, b"cursor")?;
         // A transparent 1x1 cursor hides the pointer.
         c.create_glyph_cursor(blank, font, font, 0, 0, 1, 1, 0, 0, 0, 0)?;
-        c.change_window_attributes(
-            win,
-            &ChangeWindowAttributesAux::new().cursor(blank),
-        )?;
+        c.change_window_attributes(win, &ChangeWindowAttributesAux::new().cursor(blank))?;
         c.close_font(font)?;
         c.flush()?;
         Ok(Self {
@@ -312,7 +305,8 @@ impl Surface {
 
     /// Fill the backing pixmap with a solid colour.
     pub fn clear(&self, colour: u32) -> crate::Result<()> {
-        self.c.change_gc(self.gc, &ChangeGCAux::new().foreground(colour))?;
+        self.c
+            .change_gc(self.gc, &ChangeGCAux::new().foreground(colour))?;
         self.c.poly_fill_rectangle(
             self.back,
             self.gc,

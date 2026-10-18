@@ -56,7 +56,14 @@ To build from source (Rust 1.75 or newer, plus the PAM development headers):
 | --- | --- |
 | Arch | `pam` |
 | Debian | `libpam0g-dev` |
-| Void | `linux-pam-devel` |
+| Void | `linux-pam-devel` (in `nonfree`/`multilib` only; releases are prebuilt) |
+
+### PAM service
+
+The installer also writes `/etc/pam.d/nirulock` (sudo, once). It reuses the
+system authentication stack only: `common-auth` on Debian and Arch,
+`system-auth` on Void. Without it, PAM would fall back to `login`, which is the
+*login* stack and carries rules meant for starting a session.
 
 ## Settings
 
@@ -81,8 +88,10 @@ In a NIRUPI session, `slock` is used instead.
 
 Version 0.1.0. Built and tested on Arch, Debian and Void.
 
-Missing: a configurable PAM service name, fingerprint support, and a preview in
+Missing: fingerprint support, a configurable PAM service name, and a preview in
 the settings file.
+
+Known limits: Caps Lock and Shift are handled; dead keys (compose) are not.
 
 ## Build needs
 
