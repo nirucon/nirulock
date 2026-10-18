@@ -43,6 +43,8 @@ jobs:
           kill -0 $L 2>/dev/null && { echo "FAIL correct password did not unlock"; cat lock.log; exit 1; } || echo "OK   correct password unlocks"
           INNER
           sudo -u tester sh /tmp/lock-test.sh
+      - name: Legacy timeout and input isolation regression
+        run: xvfb-run -a cargo test --locked --test x11 -- --ignored --test-threads=1
       - name: Shellcheck
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \

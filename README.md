@@ -72,7 +72,6 @@ system authentication stack only: `common-auth` on Debian,
 ```toml
 font_path = "/path/to/monospace.ttf"  # default: fontconfig lookup
 font_size = 22.0
-lock_timeout_minutes = 5              # default: from screensaver.toml, else 5
 
 [palette]
 background = "0f0f10"
@@ -85,30 +84,31 @@ focus = "5a5a60"
 ### Diagnosing a lock
 
 The screen writes what it did to `~/.local/state/nirulock/trace.log`: when it
-started, grabbed the keyboard, told the window manager, accepted a password or
-released itself. That log is the only evidence available when a lock screen
-misbehaves, because it covers the screen.
+started, grabbed the keyboard, told the window manager or accepted a password.
+Input characters, keycodes and modifiers are never logged. Legacy logs containing
+keycode diagnostics are removed when the new locker first starts.
 
-The lock screen gives up after `lock_timeout_minutes` without a password,
-multiplied by ten, and writes that to the log. It is a last resort for a screen
-that has stopped working; a lock that works is never affected.
+The lock never dismisses itself on a timer. Legacy `lock_timeout_minutes` is
+accepted but ignored; `NIRULOCK_SAFE_SECONDS` no longer bypasses authentication.
+Update the idle daemon too and log out/in so old timeout wrappers stop running.
 
 Use it from NIRUWM with `Super+Escape`, which picks `nirulock` when installed.
 In a NIRUPI session, `slock` is used instead.
 
 ## Status
 
-Version 0.16.3. Built and tested on Arch, Debian and Void.
+Version 0.16.4. Built and tested on Arch, Debian and Void.
+
+Part of a personal desktop for the author's own use; others are welcome to try it.
+[Roadmap](https://github.com/nirucon/nirux/blob/main/ROADMAP.md).
 
 What it does when something goes wrong, since a lock screen cannot show a
 terminal:
 
-- A key grab the window manager refuses is ignored, not fatal. The keyboard
-  grab already covers those keys.
+- Active grab replies are checked; an unacquired keyboard is a startup failure.
 - Keys the lock screen takes are announced to X11's idle clock, so an idle
   timer does not lock the screen again a moment after the password.
-- A wrong password releases and retakes the keyboard cleanly, so the next
-  attempt is judged the same way.
+- A wrong password retains the input grab continuously for the next attempt.
 - A settings file that cannot be read falls back to the built-in defaults
   instead of refusing to start.
 

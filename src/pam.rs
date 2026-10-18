@@ -145,14 +145,15 @@ pub fn current_user() -> String {
 
 /// Verify `password` for `user`. Only `PAM_SUCCESS` is a success.
 pub fn authenticate(user: &str, password: &str) -> Result<bool, String> {
+    // Serialize the complete password lifetime, including assignment/erasure.
+    let _guard = PAM_LOCK.lock().map_err(|_| "PAM state poisoned")?;
+    let cuser = CString::new(user).map_err(|_| "invalid user name")?;
     if let Ok(mut p) = PASSWORD.lock() {
         *p = Some(password.to_string());
     }
     let result = {
         // One authentication at a time: the conversation callback reads a
         // process-wide password.
-        let _guard = PAM_LOCK.lock().map_err(|_| "PAM state poisoned")?;
-        let cuser = CString::new(user).map_err(|_| "invalid user name")?;
         let conv = PamConv {
             conv: Some(conversation),
             appdata_ptr: std::ptr::null_mut(),

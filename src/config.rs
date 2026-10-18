@@ -21,8 +21,7 @@ pub struct Config {
     pub font_path: Option<String>,
     pub font_size: f32,
     pub palette: palette::Palette,
-    /// Minutes the lock screen survives without further typing, from the
-    /// shared ladder settings.
+    /// Deprecated compatibility input. Never used to dismiss a lock.
     pub lock_timeout_minutes: u64,
 }
 
@@ -32,7 +31,7 @@ impl Default for Config {
             font_path: None,
             font_size: 22.0,
             palette: palette::Palette::default(),
-            lock_timeout_minutes: 5,
+            lock_timeout_minutes: 0,
         }
     }
 }
@@ -134,15 +133,11 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}\ngives up after: {} min",
+            "config: {}\nfont size: {}\nfont: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
-            if self.lock_timeout_minutes == 0 {
-                "never".to_string()
-            } else {
-                self.lock_timeout_minutes.to_string()
-            },
+            self.lock_timeout_minutes,
         )
     }
 }

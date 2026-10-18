@@ -73,11 +73,16 @@ struct Lock {
     state: State,
     input: String,
     started: Instant,
-    last_minute: String,
     message: String,
-    /// Keycodes grabbed on top of the keyboard grab, released before asking
-    /// for the password again.
-    key_grabs: std::cell::RefCell<Vec<u8>>,
+    wm_notified: bool,
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        if self.wm_notified {
+            let _ = self.tell_wm_locked(false);
+        }
+    }
 }
 
 impl Lock {
@@ -97,9 +102,8 @@ impl Lock {
             state: State::Prompt,
             input: String::new(),
             started: Instant::now(),
-            last_minute: String::new(),
             message: String::new(),
-            key_grabs: std::cell::RefCell::new(Vec::new()),
+            wm_notified: false,
         };
         lock.trace("starting");
         // Grab the pointer first, then ask the window manager to let go of its
@@ -117,6 +121,7 @@ impl Lock {
         // message is a round trip, and the client processes it before the
         // next request from us.
         lock.tell_wm_locked(true)?;
+        lock.wm_notified = true;
         // Above everything from the first frame: the bar and any
         // override-redirect window are already on screen when a lock starts.
         lock.keep_on_top()?;
@@ -176,6 +181,15 @@ impl Lock {
         if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > 256 * 1024 {
             let _ = std::fs::remove_file(&path);
         }
+        // Older releases logged raw keyboard codes. Remove that legacy log
+        // rather than append lifecycle diagnostics to password-derived data.
+        if std::fs::read_to_string(&path)
+            .ok()
+            .map(|s| s.lines().any(|l| l.contains("key code ")))
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&path);
+        }
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -233,76 +247,52 @@ impl Lock {
 
     fn grab_pointer(&self) -> Result<()> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
-        self.surface.c.grab_pointer(
-            true,
-            root,
-            EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
-            GrabMode::ASYNC,
-            GrabMode::ASYNC,
-            x11rb::NONE,
-            x11rb::NONE,
-            x11rb::CURRENT_TIME,
-        )?;
+        let reply = self
+            .surface
+            .c
+            .grab_pointer(
+                true,
+                root,
+                EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                x11rb::CURRENT_TIME,
+            )?
+            .reply()?;
+        if reply.status != GrabStatus::SUCCESS {
+            return Err(format!("cannot grab pointer: {:?}", reply.status).into());
+        }
         self.surface.c.flush()?;
         Ok(())
     }
 
-    /// Grab the keyboard and every key.
-    ///
-    /// Called after the window manager has released its own grabs; the
-    /// keyboard grab does not displace a passive key grab that another client
-    /// already holds, which is why the order matters.
+    /// Acquire a verified active keyboard grab after notifying the WM.
     fn grab_input(&self) -> Result<()> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
-        self.surface.c.grab_keyboard(
-            true,
-            root,
-            x11rb::CURRENT_TIME,
-            GrabMode::ASYNC,
-            GrabMode::ASYNC,
-        )?;
-        // Grab every key individually as well. The keyboard grab above is
-        // enough on a quiet server, but a client that already holds a
-        // combination makes X split the keyboard, so the explicit grabs are
-        // the safety net for keys such as Escape.
-        //
-        // Two important limits. A client that asked for key grabs with
-        // `owner_events = false` (normally the window manager, which is still
-        // running) makes every plain-key grab fail with Access. That is not an
-        // error worth printing: the keyboard grab already covers those keys.
-        // And when a grab fails, X reports it asynchronously, so the error must
-        // not be queued before the rest of the grabs are requested.
-        self.surface.c.flush()?;
-        // Remember what was grabbed so that going back to the password prompt
-        // releases exactly that and nothing else.
-        let mut grabbed = Vec::new();
-        for code in 8..=255u8 {
-            if self
+        // Give a WM handling the release request time to let go. A queued
+        // request is not a successful grab: inspect the actual server reply.
+        for _ in 0..100 {
+            let reply = self
                 .surface
                 .c
-                .grab_key(
-                    true,
+                .grab_keyboard(
+                    false,
                     root,
-                    ModMask::ANY,
-                    code,
+                    x11rb::CURRENT_TIME,
                     GrabMode::ASYNC,
                     GrabMode::ASYNC,
-                )
-                .is_ok()
-            {
-                grabbed.push(code);
+                )?
+                .reply()?;
+            if reply.status == GrabStatus::SUCCESS {
+                self.trace("input grabbed");
+                return Ok(());
             }
+            std::thread::sleep(Duration::from_millis(20));
         }
-        self.surface.c.flush()?;
-        // The refusals are asynchronous and arrive before or with this reply.
-        // Reading it here keeps them from reaching the lock's own result.
-        let _ = self.surface.c.get_input_focus()?.reply();
-        self.trace(&format!("key grabs: {} requested", grabbed.len()));
-
-        *self.key_grabs.borrow_mut() = grabbed;
-        self.surface.c.sync()?;
-        self.trace("input grabbed");
-        Ok(())
+        let _ = self.tell_wm_locked(false);
+        Err("cannot acquire keyboard; lock was not established".into())
     }
 
     /// Raise the lock window over everything and make it full screen again.
@@ -416,11 +406,6 @@ impl Lock {
                 // the session can continue.
                 let _ = self.tell_wm_locked(false);
                 self.surface.release_input()?;
-                self.surface.c.ungrab_key(
-                    0,
-                    self.surface.c.setup().roots[self.surface.screen_num].root,
-                    ModMask::ANY,
-                )?;
                 // An active keyboard grab swallows synthetic key events, and
                 // those are how the idle clock is told the user is here.
                 self.surface.c.ungrab_keyboard(x11rb::CURRENT_TIME)?;
@@ -444,67 +429,22 @@ impl Lock {
         }
         // A short visible failure before returning to the prompt.
         self.draw()?;
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(600) {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        // Back to the prompt with a clean keyboard. A refused key grab leaves
-        // a passive grab behind if it is not released explicitly, and a passive
-        // grab on every key of a modifier makes every later keystroke belong to
-        // this window, which looks exactly like a lock that ignores typing.
-        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
-        for code in self.key_grabs.borrow_mut().drain(..) {
-            let _ = self.surface.c.ungrab_key(code, root, ModMask::ANY);
-        }
-        let _ = self.surface.c.ungrab_keyboard(x11rb::CURRENT_TIME);
-        self.surface.c.sync()?;
-        let _ = self.surface.c.get_input_focus()?.reply();
-        // Take the keyboard again, the same way the lock started, so typing
-        // is checked with the same names the wrong password used.
-        self.grab_input()?;
+        std::thread::sleep(Duration::from_millis(600));
+        // Keep the verified active grab throughout a failed attempt. Releasing
+        // it even briefly could deliver subsequent typing to desktop clients.
         self.state = State::Prompt;
-        self.last_minute.clear();
         self.draw()?;
         Ok(())
     }
 
-    /// Send a key event to the root window, which is what counts as user
-    /// activity for X11's idle clock.
+    /// Reset X11's real idle clock; synthetic root key events do not do that.
     fn touch_idle_clock(&self) {
-        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
-        let _ = self.surface.c.send_event(
-            true,
-            root,
-            EventMask::NO_EVENT,
-            KeyPressEvent {
-                response_type: KEY_PRESS_EVENT,
-                sequence: 0,
-                detail: 0,
-                time: x11rb::CURRENT_TIME,
-                root,
-                event: root,
-                child: x11rb::NONE,
-                root_x: 0,
-                root_y: 0,
-                event_x: 0,
-                event_y: 0,
-                state: KeyButMask::from(0u16),
-                same_screen: true,
-            },
-        );
+        let _ = self.surface.c.force_screen_saver(ScreenSaver::RESET);
         let _ = self.surface.c.flush();
     }
 
     fn handle_key(&mut self, e: KeyPressEvent) -> Result<bool> {
-        // Every key that arrives is logged while it is being judged. When one
-        // did not arrive (a keyboard grab held by the window manager won over
-        // the lock's), this line is what tells the difference; without it the
-        // only evidence was a password that seemed to be ignored.
-        self.trace(&format!(
-            "key code {} state {:#x}",
-            e.detail,
-            u16::from(e.state)
-        ));
+        // Never log keycodes, modifiers, characters or password lengths.
         // The server does not start the X11 idle clock for keys it delivered
         // through a grab. On a machine whose idle timer locks after a short
         // time, that means the screen locks again moments after the password
@@ -527,7 +467,7 @@ impl Lock {
             }
             s if s.chars().count() == 1 => {
                 let c = s.chars().next().unwrap();
-                if !c.is_control() {
+                if !c.is_control() && self.input.len() + c.len_utf8() <= 4096 {
                     self.input.push(c);
                 }
             }
@@ -591,24 +531,7 @@ impl Lock {
 
     fn run(&mut self) -> Result<()> {
         let mut minute = String::new();
-        // Escape hatch for testing: NIRULOCK_SAFE_SECONDS=20 releases the lock
-        // after twenty seconds. It exists so a lock that cannot be unlocked
-        // never costs another ssh session; it is deliberately an environment
-        // variable, not a setting, so it cannot be left on by accident.
-        //
-        // The same clock is the ladder's `lock_timeout_minutes` multiplied by
-        // ten, so a lock screen that stops working releases the screen instead
-        // of leaving the machine unusable. An error-free lock never reaches it.
-        let limit = std::env::var("NIRULOCK_SAFE_SECONDS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .or_else(|| {
-                (self.cfg.lock_timeout_minutes > 0).then_some(self.cfg.lock_timeout_minutes * 10)
-            });
-        let emergency: Option<Instant> = limit.map(|secs| {
-            self.trace(&format!("release after {secs}s without a password"));
-            Instant::now() + Duration::from_secs(secs)
-        });
+        // An established lock has no unauthenticated timer or environment bypass.
         // Watch the server for as long as the lock is up. Compositors can
         // reset their stacking order after the lock window was raised (picom
         // recreates windows when it restarts, for one), and then the desktop
@@ -617,15 +540,6 @@ impl Lock {
         // cannot go wrong quietly.
         self.watch_stacking()?;
         loop {
-            if let Some(deadline) = emergency {
-                if Instant::now() >= deadline {
-                    self.trace("release fired: the screen came back without a password");
-                    self.surface.release_input()?;
-                    self.surface.c.destroy_window(self.surface.win)?;
-                    self.surface.c.flush()?;
-                    return Ok(());
-                }
-            }
             let now = Local::now();
             let m = now.format("%Y-%m-%d %H:%M").to_string();
             if m != minute {
@@ -719,6 +633,7 @@ fn main() {
         "" | "--lock" => match Lock::new() {
             Ok(mut lock) => {
                 if let Err(e) = lock.run() {
+                    let _ = lock.tell_wm_locked(false);
                     eprintln!("nirulock: {e}");
                     std::process::exit(1)
                 }
