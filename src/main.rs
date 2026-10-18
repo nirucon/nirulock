@@ -108,8 +108,28 @@ impl Lock {
         // keyboard between the two clients, and ordinary letters never reach
         // the lock screen: only Super+key did.
         lock.tell_wm_locked(true)?;
+        // Above everything from the first frame: the bar and any
+        // override-redirect window are already on screen when a lock starts.
+        lock.keep_on_top()?;
         lock.draw()?;
         Ok(lock)
+    }
+
+    /// Ask to be told when the stacking order changes.
+    ///
+    /// The lock window is raised above everything; if something raises itself
+    /// over it, this brings the lock back. A lock screen that can be covered is
+    /// not a lock screen, and the keyboard grab alone would hide the problem:
+    /// the keys would still be caught while the desktop stayed readable.
+    fn watch_stacking(&self) -> Result<()> {
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        self.surface.c.change_window_attributes(
+            root,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::SUBSTRUCTURE_NOTIFY),
+        )?;
+        self.surface.c.flush()?;
+        self.trace("watching the stacking order");
+        Ok(())
     }
 
     /// Grab the keyboard and pointer so input cannot reach other windows.
@@ -260,6 +280,27 @@ impl Lock {
         *self.key_grabs.borrow_mut() = grabbed;
         self.surface.c.sync()?;
         self.trace("input grabbed");
+        Ok(())
+    }
+
+    /// Raise the lock window over everything and make it full screen again.
+    ///
+    /// Also used once at start, so the window is certainly above the bar and
+    /// any override-redirect window that was there before.
+    fn keep_on_top(&mut self) -> Result<()> {
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        self.surface.c.configure_window(
+            self.surface.win,
+            &ConfigureWindowAux::new()
+                .x(0)
+                .y(0)
+                .width(u32::from(self.surface.width))
+                .height(u32::from(self.surface.height))
+                .stack_mode(StackMode::ABOVE),
+        )?;
+        self.surface.c.map_window(self.surface.win)?;
+        let _ = root;
+        self.surface.c.flush()?;
         Ok(())
     }
 
@@ -537,6 +578,13 @@ impl Lock {
             self.trace(&format!("release after {secs}s without a password"));
             Instant::now() + Duration::from_secs(secs)
         });
+        // Watch the server for as long as the lock is up. Compositors can
+        // reset their stacking order after the lock window was raised (picom
+        // recreates windows when it restarts, for one), and then the desktop
+        // is visible through the lock even though its keyboard is still
+        // grabbed. Re-asserting the place is cheap and is the only thing that
+        // cannot go wrong quietly.
+        self.watch_stacking()?;
         loop {
             if let Some(deadline) = emergency {
                 if Instant::now() >= deadline {
@@ -564,6 +612,13 @@ impl Lock {
                 // did not need, so errors between events are drained here.
                 loop {
                     match self.surface.c.poll_for_event() {
+                        Ok(Some(Event::CirculateNotify(_))) => {
+                            self.keep_on_top()?;
+                        }
+                        Ok(Some(Event::ConfigureNotify(e))) if e.window == self.surface.win => {
+                            // Something reconfigured the lock window itself.
+                            self.keep_on_top()?;
+                        }
                         Ok(Some(event)) => match event {
                             Event::KeyPress(e) => {
                                 self.handle_key(e)?;

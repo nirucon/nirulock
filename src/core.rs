@@ -277,6 +277,28 @@ impl Surface {
         )?;
         c.create_gc(gc, win, &CreateGCAux::new())?;
         c.create_pixmap(depth, back, screen.root, width, height)?;
+        // A compositor must not dim the lock screen. picom applies a default
+        // opacity to frames of clients it does not know, and a lock window at
+        // 90% opacity shows the desktop through it: on Void the page behind
+        // stayed readable while the keyboard was still grabbed. Asking for
+        // full opacity by name is the only thing a compositor is obliged to
+        // honour, and a window class gives it a stable name to match rules on.
+        c.change_property32(
+            PropMode::REPLACE,
+            win,
+            c.intern_atom(false, b"_NET_WM_WINDOW_OPACITY")?
+                .reply()?
+                .atom,
+            AtomEnum::CARDINAL,
+            &[u32::MAX],
+        )?;
+        c.change_property8(
+            PropMode::REPLACE,
+            win,
+            AtomEnum::WM_CLASS,
+            AtomEnum::STRING,
+            format!("{name}\0{name}\0").as_bytes(),
+        )?;
         c.change_property8(
             PropMode::REPLACE,
             win,

@@ -98,7 +98,7 @@ In a NIRUPI session, `slock` is used instead.
 
 ## Status
 
-Version 0.14.1. Built and tested on Arch, Debian and Void.
+Version 0.15.0. Built and tested on Arch, Debian and Void.
 
 What it does when something goes wrong, since a lock screen cannot show a
 terminal:
