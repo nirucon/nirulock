@@ -1,4 +1,4 @@
-//! `~/.config/niruui/screensaver.toml`
+//! `~/.config/niruui/lock.toml`
 //!
 //! The NIRU desktop programs share one directory for their settings so they
 //! can be found in one place, but each program has its own file and never
@@ -40,12 +40,28 @@ impl Config {
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(e) => return Err(format!("{}: {e}", path.display()).into()),
+            // An unreadable or damaged settings file must never keep the screen
+            // unlocked. Defaults are good enough to show the lock screen, so
+            // say what happened and carry on with them.
+            Err(e) => {
+                eprintln!("nirulock: {}: {e}; using defaults", path.display());
+                return Ok(Self::default());
+            }
         };
-        let value: toml::Value = text
-            .parse()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        Self::from_value(&value).map_err(|e| format!("{}: {e}", path.display()).into())
+        let value: toml::Value = match text.parse() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nirulock: {}: {e}; using defaults", path.display());
+                return Ok(Self::default());
+            }
+        };
+        match Self::from_value(&value) {
+            Ok(cfg) => Ok(cfg),
+            Err(e) => {
+                eprintln!("nirulock: {}: {e}; using defaults", path.display());
+                Ok(Self::default())
+            }
+        }
     }
 
     fn from_value(v: &toml::Value) -> Result<Self> {
