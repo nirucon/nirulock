@@ -75,6 +75,9 @@ struct Lock {
     started: Instant,
     last_minute: String,
     message: String,
+    /// Keycodes grabbed on top of the keyboard grab, released before asking
+    /// for the password again.
+    key_grabs: std::cell::RefCell<Vec<u8>>,
 }
 
 impl Lock {
@@ -96,6 +99,7 @@ impl Lock {
             started: Instant::now(),
             last_minute: String::new(),
             message: String::new(),
+            key_grabs: std::cell::RefCell::new(Vec::new()),
         };
         lock.trace("starting");
         lock.grab_input()?;
@@ -122,10 +126,12 @@ impl Lock {
     /// A lock screen that misbehaves gives no other evidence: it covers the
     /// screen, so nobody can read a terminal. The log is the only way to see
     /// what happened afterwards.
+    ///
+    /// It is always on. The earlier version only logged when
+    /// `NIRULOCK_TRACE=1` was set in the session that started the lock, which a
+    /// key press started by the window manager never inherited, so failures
+    /// left no trace at all. Lines are small and the file is trimmed.
     fn trace(&self, message: &str) {
-        if std::env::var_os("NIRULOCK_TRACE").is_none() {
-            return;
-        }
         let dir = std::env::var("XDG_STATE_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
@@ -134,10 +140,16 @@ impl Lock {
             })
             .join("nirulock");
         let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("trace.log");
+        // Keep the last few hundred lines: enough for a post mortem, small
+        // enough to leave in place for months.
+        if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > 256 * 1024 {
+            let _ = std::fs::remove_file(&path);
+        }
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(dir.join("trace.log"))
+            .open(&path)
         {
             use std::io::Write;
             let _ = writeln!(f, "{} {}", chrono::Local::now().format("%H:%M:%S"), message);
@@ -220,7 +232,9 @@ impl Lock {
         // And when a grab fails, X reports it asynchronously, so the error must
         // not be queued before the rest of the grabs are requested.
         self.surface.c.flush()?;
-        let mut failed = 0usize;
+        // Remember what was grabbed so that going back to the password prompt
+        // releases exactly that and nothing else.
+        let mut grabbed = Vec::new();
         for code in 8..=255u8 {
             if self
                 .surface
@@ -233,16 +247,17 @@ impl Lock {
                     GrabMode::ASYNC,
                     GrabMode::ASYNC,
                 )
-                .is_err()
+                .is_ok()
             {
-                failed += 1;
+                grabbed.push(code);
             }
         }
         self.surface.c.flush()?;
-        // The failures are asynchronous and arrive before or with this reply.
+        // The refusals are asynchronous and arrive before or with this reply.
         // Reading it here keeps them from reaching the lock's own result.
         let _ = self.surface.c.get_input_focus()?.reply();
-        self.trace(&format!("key grabs: {failed} could not be requested"));
+        self.trace(&format!("key grabs: {} requested", grabbed.len()));
+        *self.key_grabs.borrow_mut() = grabbed;
         self.surface.c.sync()?;
         self.trace("input grabbed");
         Ok(())
@@ -343,6 +358,10 @@ impl Lock {
                     self.surface.c.setup().roots[self.surface.screen_num].root,
                     ModMask::ANY,
                 )?;
+                // An active keyboard grab swallows synthetic key events, and
+                // those are how the idle clock is told the user is here.
+                self.surface.c.ungrab_keyboard(x11rb::CURRENT_TIME)?;
+                self.surface.c.sync()?;
                 self.surface.c.destroy_window(self.surface.win)?;
                 self.surface.c.flush()?;
                 self.touch_idle_clock();
@@ -366,6 +385,20 @@ impl Lock {
         while start.elapsed() < Duration::from_millis(600) {
             std::thread::sleep(Duration::from_millis(50));
         }
+        // Back to the prompt with a clean keyboard. A refused key grab leaves
+        // a passive grab behind if it is not released explicitly, and a passive
+        // grab on every key of a modifier makes every later keystroke belong to
+        // this window, which looks exactly like a lock that ignores typing.
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        for code in self.key_grabs.borrow_mut().drain(..) {
+            let _ = self.surface.c.ungrab_key(code, root, ModMask::ANY);
+        }
+        let _ = self.surface.c.ungrab_keyboard(x11rb::CURRENT_TIME);
+        self.surface.c.sync()?;
+        let _ = self.surface.c.get_input_focus()?.reply();
+        // Take the keyboard again, the same way the lock started, so typing
+        // is checked with the same names the wrong password used.
+        self.grab_input()?;
         self.state = State::Prompt;
         self.last_minute.clear();
         self.draw()?;
@@ -490,17 +523,24 @@ impl Lock {
         // after twenty seconds. It exists so a lock that cannot be unlocked
         // never costs another ssh session; it is deliberately an environment
         // variable, not a setting, so it cannot be left on by accident.
-        let emergency: Option<Instant> = std::env::var("NIRULOCK_SAFE_SECONDS")
+        //
+        // The same clock is the ladder's `lock_timeout_minutes` multiplied by
+        // ten, so a lock screen that stops working releases the screen instead
+        // of leaving the machine unusable. An error-free lock never reaches it.
+        let limit = std::env::var("NIRULOCK_SAFE_SECONDS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .map(|secs| {
-                self.trace(&format!("emergency release after {secs}s"));
-                Instant::now() + Duration::from_secs(secs)
+            .or_else(|| {
+                (self.cfg.lock_timeout_minutes > 0).then_some(self.cfg.lock_timeout_minutes * 10)
             });
+        let emergency: Option<Instant> = limit.map(|secs| {
+            self.trace(&format!("release after {secs}s without a password"));
+            Instant::now() + Duration::from_secs(secs)
+        });
         loop {
             if let Some(deadline) = emergency {
                 if Instant::now() >= deadline {
-                    self.trace("emergency release fired");
+                    self.trace("release fired: the screen came back without a password");
                     self.surface.release_input()?;
                     self.surface.c.destroy_window(self.surface.win)?;
                     self.surface.c.flush()?;

@@ -8,11 +8,22 @@ use crate::{palette, Result};
 
 pub const DEFAULT_PATH: &str = "lock.toml";
 
+/// The shared screensaver settings, the same file `niruwm/preferences.rs`
+/// reads for the idle ladder.
+///
+/// niruwm draws its own lock screen when the session uses the suite's window
+/// manager instead of niruidle. Reading the same numbers means changing the
+/// lock delay once changes it everywhere.
+pub const LADDER_PATH: &str = "screensaver.toml";
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub font_path: Option<String>,
     pub font_size: f32,
     pub palette: palette::Palette,
+    /// Minutes the lock screen survives without further typing, from the
+    /// shared ladder settings.
+    pub lock_timeout_minutes: u64,
 }
 
 impl Default for Config {
@@ -21,6 +32,7 @@ impl Default for Config {
             font_path: None,
             font_size: 22.0,
             palette: palette::Palette::default(),
+            lock_timeout_minutes: 5,
         }
     }
 }
@@ -32,6 +44,20 @@ fn config_file() -> std::path::PathBuf {
             std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
         });
     base.join("niruui").join(DEFAULT_PATH)
+}
+
+fn ladder_file() -> std::path::PathBuf {
+    config_file().with_file_name(LADDER_PATH)
+}
+
+/// `lock_timeout_minutes` from the shared ladder, when it is readable.
+fn ladder_timeout() -> Option<u64> {
+    let text = std::fs::read_to_string(ladder_file()).ok()?;
+    let v: toml::Value = text.parse().ok()?;
+    v.get("lock_timeout_minutes")?
+        .as_integer()
+        .filter(|n| *n >= 0)
+        .map(|n| n as u64)
 }
 
 impl Config {
@@ -66,6 +92,18 @@ impl Config {
 
     fn from_value(v: &toml::Value) -> Result<Self> {
         let mut cfg = Self::default();
+        // The shared ladder wins over the built-in five minutes; lock.toml may
+        // still override it below.
+        if let Some(n) = ladder_timeout() {
+            cfg.lock_timeout_minutes = n;
+        }
+        if let Some(n) = v
+            .get("lock_timeout_minutes")
+            .and_then(|x| x.as_integer())
+            .filter(|n| *n >= 0)
+        {
+            cfg.lock_timeout_minutes = n as u64;
+        }
         if let Some(t) = v.get("font_path").and_then(|x| x.as_str()) {
             cfg.font_path = Some(t.to_string());
         }
@@ -96,10 +134,15 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}",
+            "config: {}\nfont size: {}\nfont: {}\ngives up after: {} min",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
+            if self.lock_timeout_minutes == 0 {
+                "never".to_string()
+            } else {
+                self.lock_timeout_minutes.to_string()
+            },
         )
     }
 }

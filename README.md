@@ -72,6 +72,7 @@ system authentication stack only: `common-auth` on Debian and Arch,
 ```toml
 font_path = "/path/to/monospace.ttf"  # default: fontconfig lookup
 font_size = 22.0
+lock_timeout_minutes = 5              # default: from screensaver.toml, else 5
 
 [palette]
 background = "0f0f10"
@@ -83,17 +84,33 @@ focus = "5a5a60"
 
 ### Diagnosing a lock
 
-Set `NIRULOCK_TRACE=1` and the screen writes what it did to
-`~/.local/state/nirulock/trace.log`: when it started, grabbed the keyboard and
-told the window manager. That log is the only evidence available when a lock
-screen misbehaves, because it covers the screen.
+The screen writes what it did to `~/.local/state/nirulock/trace.log`: when it
+started, grabbed the keyboard, told the window manager, accepted a password or
+released itself. That log is the only evidence available when a lock screen
+misbehaves, because it covers the screen.
+
+The lock screen gives up after `lock_timeout_minutes` without a password,
+multiplied by ten, and writes that to the log. It is a last resort for a screen
+that has stopped working; a lock that works is never affected.
 
 Use it from NIRUWM with `Super+Escape`, which picks `nirulock` when installed.
 In a NIRUPI session, `slock` is used instead.
 
 ## Status
 
-Version 0.13.1. Built and tested on Arch, Debian and Void.
+Version 0.14.0. Built and tested on Arch, Debian and Void.
+
+What it does when something goes wrong, since a lock screen cannot show a
+terminal:
+
+- A key grab the window manager refuses is ignored, not fatal. The keyboard
+  grab already covers those keys.
+- Keys the lock screen takes are announced to X11's idle clock, so an idle
+  timer does not lock the screen again a moment after the password.
+- A wrong password releases and retakes the keyboard cleanly, so the next
+  attempt is judged the same way.
+- A settings file that cannot be read falls back to the built-in defaults
+  instead of refusing to start.
 
 Missing: fingerprint support, a configurable PAM service name, and a preview in
 the settings file.
