@@ -10,7 +10,7 @@
 # programs.
 set -eu
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 REPO="${NIRULOCK_REPO:-nirucon/nirulock}"
 BIN="nirulock"
 PREFIX="${NIRULOCK_PREFIX:-$HOME/.local}"
