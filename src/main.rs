@@ -212,16 +212,37 @@ impl Lock {
         // enough on a quiet server, but a client that already holds a
         // combination makes X split the keyboard, so the explicit grabs are
         // the safety net for keys such as Escape.
+        //
+        // Two important limits. A client that asked for key grabs with
+        // `owner_events = false` (normally the window manager, which is still
+        // running) makes every plain-key grab fail with Access. That is not an
+        // error worth printing: the keyboard grab already covers those keys.
+        // And when a grab fails, X reports it asynchronously, so the error must
+        // not be queued before the rest of the grabs are requested.
+        self.surface.c.flush()?;
+        let mut failed = 0usize;
         for code in 8..=255u8 {
-            let _ = self.surface.c.grab_key(
-                true,
-                root,
-                ModMask::ANY,
-                code,
-                GrabMode::ASYNC,
-                GrabMode::ASYNC,
-            );
+            if self
+                .surface
+                .c
+                .grab_key(
+                    true,
+                    root,
+                    ModMask::ANY,
+                    code,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )
+                .is_err()
+            {
+                failed += 1;
+            }
         }
+        self.surface.c.flush()?;
+        // The failures are asynchronous and arrive before or with this reply.
+        // Reading it here keeps them from reaching the lock's own result.
+        let _ = self.surface.c.get_input_focus()?.reply();
+        self.trace(&format!("key grabs: {failed} could not be requested"));
         self.surface.c.sync()?;
         self.trace("input grabbed");
         Ok(())
@@ -312,6 +333,7 @@ impl Lock {
         self.draw()?;
         match pam::authenticate(&user, &self.input) {
             Ok(true) => {
+                self.trace("password accepted");
                 // Accepted: give the keyboard back, then release the grabs so
                 // the session can continue.
                 let _ = self.tell_wm_locked(false);
@@ -323,6 +345,8 @@ impl Lock {
                 )?;
                 self.surface.c.destroy_window(self.surface.win)?;
                 self.surface.c.flush()?;
+                self.touch_idle_clock();
+                self.trace("password accepted, idle clock told");
                 std::process::exit(0);
             }
             Ok(false) => {
@@ -348,7 +372,40 @@ impl Lock {
         Ok(())
     }
 
+    /// Send a key event to the root window, which is what counts as user
+    /// activity for X11's idle clock.
+    fn touch_idle_clock(&self) {
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        let _ = self.surface.c.send_event(
+            true,
+            root,
+            EventMask::NO_EVENT,
+            KeyPressEvent {
+                response_type: KEY_PRESS_EVENT,
+                sequence: 0,
+                detail: 0,
+                time: x11rb::CURRENT_TIME,
+                root,
+                event: root,
+                child: x11rb::NONE,
+                root_x: 0,
+                root_y: 0,
+                event_x: 0,
+                event_y: 0,
+                state: KeyButMask::from(0u16),
+                same_screen: true,
+            },
+        );
+        let _ = self.surface.c.flush();
+    }
+
     fn handle_key(&mut self, e: KeyPressEvent) -> Result<bool> {
+        // The server does not start the X11 idle clock for keys it delivered
+        // through a grab. On a machine whose idle timer locks after a short
+        // time, that means the screen locks again moments after the password
+        // is accepted. Announcing each key the lock screen takes keeps the
+        // clock honest the whole time, not only when it unlocks.
+        self.touch_idle_clock();
         // Map the keycode to a printable character through the keyboard map.
         let sym = self.keystring(e)?;
         match sym.as_str() {
@@ -461,20 +518,35 @@ impl Lock {
                 1000,
             );
             if ready {
-                while let Some(event) = self.surface.c.poll_for_event()? {
-                    match event {
-                        Event::KeyPress(e) => {
-                            self.handle_key(e)?;
+                // `poll_for_event` stops at the first error, and every rejected
+                // key grab on a busy window manager is one. A lock screen must
+                // not stop reading keys because the server refused a grab it
+                // did not need, so errors between events are drained here.
+                loop {
+                    match self.surface.c.poll_for_event() {
+                        Ok(Some(event)) => match event {
+                            Event::KeyPress(e) => {
+                                self.handle_key(e)?;
+                            }
+                            Event::Expose(_) => self.draw()?,
+                            Event::MappingNotify(_) => {
+                                // The keymap changed under us (setxkbmap, layout
+                                // switch). x11rb refreshes its own cache; the next
+                                // key press reads the new mapping.
+                                self.surface.c.flush()?;
+                            }
+                            Event::Error(e) => eprintln!("nirulock: X11 error: {e:?}"),
+                            _ => {}
+                        },
+                        Ok(None) => break,
+                        // Every decode error already has an event next in
+                        // line, so draining is safe.
+                        // A closed connection is the one error that means
+                        // stop; anything else arrives as an event next.
+                        Err(x11rb::errors::ConnectionError::IoError(e)) => {
+                            return Err(format!("lost the X connection: {e}").into());
                         }
-                        Event::Expose(_) => self.draw()?,
-                        Event::MappingNotify(_) => {
-                            // The keymap changed under us (setxkbmap, layout
-                            // switch). x11rb refreshes its own cache; the next
-                            // key press reads the new mapping.
-                            self.surface.c.flush()?;
-                        }
-                        Event::Error(e) => eprintln!("nirulock: X11 error: {e:?}"),
-                        _ => {}
+                        Err(e) => eprintln!("nirulock: {e}"),
                     }
                 }
             } else {
