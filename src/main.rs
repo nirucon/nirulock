@@ -429,7 +429,27 @@ impl Lock {
 
     fn run(&mut self) -> Result<()> {
         let mut minute = String::new();
+        // Escape hatch for testing: NIRULOCK_SAFE_SECONDS=20 releases the lock
+        // after twenty seconds. It exists so a lock that cannot be unlocked
+        // never costs another ssh session; it is deliberately an environment
+        // variable, not a setting, so it cannot be left on by accident.
+        let emergency: Option<Instant> = std::env::var("NIRULOCK_SAFE_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|secs| {
+                self.trace(&format!("emergency release after {secs}s"));
+                Instant::now() + Duration::from_secs(secs)
+            });
         loop {
+            if let Some(deadline) = emergency {
+                if Instant::now() >= deadline {
+                    self.trace("emergency release fired");
+                    self.surface.release_input()?;
+                    self.surface.c.destroy_window(self.surface.win)?;
+                    self.surface.c.flush()?;
+                    return Ok(());
+                }
+            }
             let now = Local::now();
             let m = now.format("%Y-%m-%d %H:%M").to_string();
             if m != minute {

@@ -93,7 +93,7 @@ In a NIRUPI session, `slock` is used instead.
 
 ## Status
 
-Version 0.7.0. Built and tested on Arch, Debian and Void.
+Version 0.13.0. Built and tested on Arch, Debian and Void.
 
 Missing: fingerprint support, a configurable PAM service name, and a preview in
 the settings file.
