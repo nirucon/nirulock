@@ -102,16 +102,26 @@ impl Lock {
             key_grabs: std::cell::RefCell::new(Vec::new()),
         };
         lock.trace("starting");
-        lock.grab_input()?;
-        // Tell the window manager to let go of its key grabs. Without this the
-        // window manager keeps owning every Super combination, X splits the
-        // keyboard between the two clients, and ordinary letters never reach
-        // the lock screen: only Super+key did.
+        // Grab the pointer first, then ask the window manager to let go of its
+        // key grabs, then take the keyboard. The order is the fix: a keyboard
+        // grab does not displace key grabs another client already holds, so
+        // taking the keyboard first meant the window manager's grabs stayed
+        // on top until each of its keys was pressed -- which is why Super had
+        // to be held to type a password.
+        lock.grab_pointer()?;
+        // Tell the window manager before taking the keyboard. It holds a
+        // grab on every key it binds, and until it has released them its grabs
+        // win over the lock's: the user then had to hold Super to reach the
+        // lock screen at all, because Super was the one modifier whose grab
+        // the lock could displace. Order matters, and so does waiting: the
+        // message is a round trip, and the client processes it before the
+        // next request from us.
         lock.tell_wm_locked(true)?;
         // Above everything from the first frame: the bar and any
         // override-redirect window are already on screen when a lock starts.
         lock.keep_on_top()?;
         lock.draw()?;
+        lock.grab_input()?;
         Ok(lock)
     }
 
@@ -221,15 +231,8 @@ impl Lock {
         Ok(())
     }
 
-    fn grab_input(&self) -> Result<()> {
+    fn grab_pointer(&self) -> Result<()> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
-        self.surface.c.grab_keyboard(
-            true,
-            root,
-            x11rb::CURRENT_TIME,
-            GrabMode::ASYNC,
-            GrabMode::ASYNC,
-        )?;
         self.surface.c.grab_pointer(
             true,
             root,
@@ -239,6 +242,24 @@ impl Lock {
             x11rb::NONE,
             x11rb::NONE,
             x11rb::CURRENT_TIME,
+        )?;
+        self.surface.c.flush()?;
+        Ok(())
+    }
+
+    /// Grab the keyboard and every key.
+    ///
+    /// Called after the window manager has released its own grabs; the
+    /// keyboard grab does not displace a passive key grab that another client
+    /// already holds, which is why the order matters.
+    fn grab_input(&self) -> Result<()> {
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        self.surface.c.grab_keyboard(
+            true,
+            root,
+            x11rb::CURRENT_TIME,
+            GrabMode::ASYNC,
+            GrabMode::ASYNC,
         )?;
         // Grab every key individually as well. The keyboard grab above is
         // enough on a quiet server, but a client that already holds a
@@ -277,6 +298,7 @@ impl Lock {
         // Reading it here keeps them from reaching the lock's own result.
         let _ = self.surface.c.get_input_focus()?.reply();
         self.trace(&format!("key grabs: {} requested", grabbed.len()));
+
         *self.key_grabs.borrow_mut() = grabbed;
         self.surface.c.sync()?;
         self.trace("input grabbed");
@@ -474,6 +496,15 @@ impl Lock {
     }
 
     fn handle_key(&mut self, e: KeyPressEvent) -> Result<bool> {
+        // Every key that arrives is logged while it is being judged. When one
+        // did not arrive (a keyboard grab held by the window manager won over
+        // the lock's), this line is what tells the difference; without it the
+        // only evidence was a password that seemed to be ignored.
+        self.trace(&format!(
+            "key code {} state {:#x}",
+            e.detail,
+            u16::from(e.state)
+        ));
         // The server does not start the X11 idle clock for keys it delivered
         // through a grab. On a machine whose idle timer locks after a short
         // time, that means the screen locks again moments after the password
