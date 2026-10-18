@@ -55,6 +55,7 @@ use std::time::{Duration, Instant};
 use x11rb::{
     connection::Connection,
     protocol::{xproto::*, Event},
+    wrapper::ConnectionExt as _,
 };
 
 /// Text shown while a password is being checked.
@@ -96,6 +97,7 @@ impl Lock {
             last_minute: String::new(),
             message: String::new(),
         };
+        lock.trace("starting");
         lock.grab_input()?;
         // Tell the window manager to let go of its key grabs. Without this the
         // window manager keeps owning every Super combination, X splits the
@@ -115,6 +117,33 @@ impl Lock {
     /// The message goes to the WM's check window, the same way `niructl`
     /// addresses commands. A missing WM is not an error: the grabs simply stay
     /// as they are.
+    /// Write a line to the diagnostic log.
+    ///
+    /// A lock screen that misbehaves gives no other evidence: it covers the
+    /// screen, so nobody can read a terminal. The log is the only way to see
+    /// what happened afterwards.
+    fn trace(&self, message: &str) {
+        if std::env::var_os("NIRULOCK_TRACE").is_none() {
+            return;
+        }
+        let dir = std::env::var("XDG_STATE_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                    .join(".local/state")
+            })
+            .join("nirulock");
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("trace.log"))
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{} {}", chrono::Local::now().format("%H:%M:%S"), message);
+        }
+    }
+
     fn tell_wm_locked(&self, locked: bool) -> Result<()> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
         let atom = |n: &str| -> Result<x11rb::protocol::xproto::Atom> {
@@ -140,8 +169,10 @@ impl Lock {
             .value32()
             .and_then(|mut v| v.next());
         let Some(wm) = check else {
+            self.trace("no window manager to notify");
             return Ok(());
         };
+        self.trace(&format!("telling wm {wm:#x} locked={locked}"));
         self.surface.c.send_event(
             false,
             wm,
@@ -153,7 +184,8 @@ impl Lock {
                 [u32::from(locked), 0, 0, 0, 0],
             ),
         )?;
-        self.surface.c.flush()?;
+        self.surface.c.sync()?;
+        self.trace("wm notified");
         Ok(())
     }
 
@@ -190,7 +222,8 @@ impl Lock {
                 GrabMode::ASYNC,
             );
         }
-        self.surface.c.flush()?;
+        self.surface.c.sync()?;
+        self.trace("input grabbed");
         Ok(())
     }
 

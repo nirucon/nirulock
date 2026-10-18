@@ -81,12 +81,19 @@ border = "2a2a2d"
 focus = "5a5a60"
 ```
 
+### Diagnosing a lock
+
+Set `NIRULOCK_TRACE=1` and the screen writes what it did to
+`~/.local/state/nirulock/trace.log`: when it started, grabbed the keyboard and
+told the window manager. That log is the only evidence available when a lock
+screen misbehaves, because it covers the screen.
+
 Use it from NIRUWM with `Super+Escape`, which picks `nirulock` when installed.
 In a NIRUPI session, `slock` is used instead.
 
 ## Status
 
-Version 0.5.0. Built and tested on Arch, Debian and Void.
+Version 0.7.0. Built and tested on Arch, Debian and Void.
 
 Missing: fingerprint support, a configurable PAM service name, and a preview in
 the settings file.
