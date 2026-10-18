@@ -97,6 +97,11 @@ impl Lock {
             message: String::new(),
         };
         lock.grab_input()?;
+        // Tell the window manager to let go of its key grabs. Without this the
+        // window manager keeps owning every Super combination, X splits the
+        // keyboard between the two clients, and ordinary letters never reach
+        // the lock screen: only Super+key did.
+        lock.tell_wm_locked(true)?;
         lock.draw()?;
         Ok(lock)
     }
@@ -105,6 +110,53 @@ impl Lock {
     ///
     /// `OwnerGrabButton` keeps the buttons grabbed after a key press; without
     /// it X releases the pointer grab and a click could focus another window.
+    /// Tell NIRUWM whether a lock screen owns the keyboard.
+    ///
+    /// The message goes to the WM's check window, the same way `niructl`
+    /// addresses commands. A missing WM is not an error: the grabs simply stay
+    /// as they are.
+    fn tell_wm_locked(&self, locked: bool) -> Result<()> {
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        let atom = |n: &str| -> Result<x11rb::protocol::xproto::Atom> {
+            Ok(self
+                .surface
+                .c
+                .intern_atom(false, n.as_bytes())?
+                .reply()?
+                .atom)
+        };
+        let check = self
+            .surface
+            .c
+            .get_property(
+                false,
+                root,
+                atom("_NET_SUPPORTING_WM_CHECK")?,
+                x11rb::protocol::xproto::AtomEnum::ANY,
+                0,
+                1,
+            )?
+            .reply()?
+            .value32()
+            .and_then(|mut v| v.next());
+        let Some(wm) = check else {
+            return Ok(());
+        };
+        self.surface.c.send_event(
+            false,
+            wm,
+            x11rb::protocol::xproto::EventMask::NO_EVENT,
+            x11rb::protocol::xproto::ClientMessageEvent::new(
+                32,
+                wm,
+                atom("_NIRUWM_LOCK")?,
+                [u32::from(locked), 0, 0, 0, 0],
+            ),
+        )?;
+        self.surface.c.flush()?;
+        Ok(())
+    }
+
     fn grab_input(&self) -> Result<()> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
         self.surface.c.grab_keyboard(
@@ -124,9 +176,10 @@ impl Lock {
             x11rb::NONE,
             x11rb::CURRENT_TIME,
         )?;
-        // Also grab the modifier keys individually: if the keyboard grab is
-        // broken by another client, Escape and the modifiers must still land
-        // on the lock window instead of a shell.
+        // Grab every key individually as well. The keyboard grab above is
+        // enough on a quiet server, but a client that already holds a
+        // combination makes X split the keyboard, so the explicit grabs are
+        // the safety net for keys such as Escape.
         for code in 8..=255u8 {
             let _ = self.surface.c.grab_key(
                 true,
@@ -226,7 +279,9 @@ impl Lock {
         self.draw()?;
         match pam::authenticate(&user, &self.input) {
             Ok(true) => {
-                // Accepted: release the grabs so the session can continue.
+                // Accepted: give the keyboard back, then release the grabs so
+                // the session can continue.
+                let _ = self.tell_wm_locked(false);
                 self.surface.release_input()?;
                 self.surface.c.ungrab_key(
                     0,
