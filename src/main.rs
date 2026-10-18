@@ -227,8 +227,7 @@ impl Lock {
         match pam::authenticate(&user, &self.input) {
             Ok(true) => {
                 // Accepted: release the grabs so the session can continue.
-                self.surface.c.ungrab_keyboard(x11rb::CURRENT_TIME)?;
-                self.surface.c.ungrab_pointer(x11rb::CURRENT_TIME)?;
+                self.surface.release_input()?;
                 self.surface.c.ungrab_key(
                     0,
                     self.surface.c.setup().roots[self.surface.screen_num].root,

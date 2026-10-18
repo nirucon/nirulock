@@ -269,7 +269,10 @@ impl Surface {
                 // Override redirect: no window manager involvement, so the
                 // screen cannot be moved, resized or covered.
                 .override_redirect(1)
-                .background_pixel(0)
+                // Opaque black, never 0. A pixel value of 0 means "transparent"
+                // on a 32-bit visual, which made the idle screen see-through
+                // and showed the desktop behind it.
+                .background_pixel(0x000000)
                 .event_mask(EventMask::EXPOSURE | EventMask::KEY_PRESS | EventMask::BUTTON_PRESS),
         )?;
         c.create_gc(gc, win, &CreateGCAux::new())?;
@@ -321,6 +324,14 @@ impl Surface {
                 height: self.height,
             }],
         )?;
+        Ok(())
+    }
+
+    /// Release the keyboard and pointer grabs.
+    pub fn release_input(&self) -> crate::Result<()> {
+        self.c.ungrab_keyboard(x11rb::CURRENT_TIME)?;
+        self.c.ungrab_pointer(x11rb::CURRENT_TIME)?;
+        self.c.flush()?;
         Ok(())
     }
 

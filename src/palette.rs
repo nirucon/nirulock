@@ -13,7 +13,9 @@ impl Default for Palette {
     fn default() -> Self {
         // NIRUPI's Niru Noir: 0f0f10, e5e5e5, a8a8a8, 2a2a2d, 5a5a60
         Self {
-            background: 0x0f0f10,
+            // Pure black. The idle and lock screens cover the whole display,
+            // and a hint of colour read as "something is behind this".
+            background: 0x000000,
             foreground: 0xe5e5e5,
             muted: 0xa8a8a8,
             border: 0x2a2a2d,
@@ -38,7 +40,7 @@ mod tests {
     #[test]
     fn default_is_niru_noir() {
         let p = Palette::default();
-        assert_eq!(p.background, 0x0f0f10);
+        assert_eq!(p.background, 0x000000, "the idle screen covers everything");
         assert_eq!(p.foreground, 0xe5e5e5);
         assert_eq!(p.muted, 0xa8a8a8);
     }
