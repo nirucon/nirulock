@@ -21,6 +21,7 @@ jobs:
         run: |
           sudo apt-get install -y xvfb x11-utils x11-apps x11-xserver-utils xdotool fonts-dejavu-core procps libpam-modules passwd util-linux
           cargo build --release --locked
+          sudo install -m 644 pam/debian/nirulock /etc/pam.d/nirulock
           sudo useradd -m -s /bin/sh tester || true
           echo 'tester:secret123' | sudo chpasswd
           sudo install -d -o tester -g tester /home/tester/bin /home/tester/.config/niruui
@@ -46,3 +47,22 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
             -S warning -s sh -e SC1007 /src/install.sh
+
+  pam-distros:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: arch
+            image: archlinux:base
+          - distro: debian
+            image: debian:bookworm-slim
+          - distro: void
+            image: voidlinux/voidlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev pkg-config
+      - run: cargo build --release --locked --bin pamcheck
+      - run: docker run --rm -e NIRU_PAM_TEST_CONTAINER=1 -v "$PWD":/src:ro '${{ matrix.image }}' sh /src/tests/pam-distro.sh '${{ matrix.distro }}'

@@ -61,8 +61,8 @@ To build from source (Rust 1.75 or newer, plus the PAM development headers):
 ### PAM service
 
 The installer also writes `/etc/pam.d/nirulock` (sudo, once). It reuses the
-system authentication stack only: `common-auth` on Debian and Arch,
-`system-auth` on Void. Without it, PAM would fall back to `login`, which is the
+system authentication stack only: `common-auth` on Debian,
+`system-auth` on Arch and Void. Without it, PAM would fall back to `login`, which is the
 *login* stack and carries rules meant for starting a session.
 
 ## Settings
@@ -98,7 +98,7 @@ In a NIRUPI session, `slock` is used instead.
 
 ## Status
 
-Version 0.16.2. Built and tested on Arch, Debian and Void.
+Version 0.16.3. Built and tested on Arch, Debian and Void.
 
 What it does when something goes wrong, since a lock screen cannot show a
 terminal:

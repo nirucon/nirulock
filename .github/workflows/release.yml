@@ -34,13 +34,21 @@ jobs:
           kill -0 $pid || { echo "::error::nirulock exited"; exit 1; }
           kill $pid
       - run: |
+          version=$(awk -F '"' '/^version = / {print $2; exit}' Cargo.toml)
+          echo "RELEASE_TAG=v$version" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then test "$GITHUB_REF_NAME" = "v$version"; fi
           mkdir -p dist
           cp target/release/nirulock dist/
-          cd dist && sha256sum nirulock > SHA256SUMS && cat SHA256SUMS
+          for distro in arch debian void; do cp "pam/$distro/nirulock" "dist/pam-$distro"; done
+          cd dist && sha256sum nirulock pam-* > SHA256SUMS && cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.0' }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          make_latest: true
           files: |
             dist/nirulock
+            dist/pam-arch
+            dist/pam-debian
+            dist/pam-void
             dist/SHA256SUMS
           generate_release_notes: true

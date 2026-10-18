@@ -5,5 +5,5 @@
 # additionally requires a shell listed in /etc/shells (pam_shells) and checks
 # /etc/nologin: properties of starting a session, not of unlocking one.
 
-auth     include   common-auth
-account  include  common-account
+auth     include   system-auth
+account  include  system-auth
