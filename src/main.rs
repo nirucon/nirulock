@@ -113,12 +113,16 @@ struct Lock {
     wrong_until: Option<Instant>,
     prompt_output: Option<u32>,
     prompt_area: display::Area,
+    ready: bool,
 }
 
 impl Drop for Lock {
     fn drop(&mut self) {
         if self.wm_notified {
             let _ = self.tell_wm_locked(false);
+        }
+        if self.ready {
+            let _ = self.publish_ready(false);
         }
     }
 }
@@ -152,6 +156,7 @@ impl Lock {
             wrong_until: None,
             prompt_output: None,
             prompt_area,
+            ready: false,
         };
         lock.trace("starting");
         // Grab the pointer first, then ask the window manager to let go of its
@@ -172,7 +177,39 @@ impl Lock {
         lock.keep_on_top()?;
         lock.update_prompt_area();
         lock.draw()?;
+        // Readiness is an explicit property, not a guess from a child pid.
+        // `niructl` uses it before suspending or reporting a lock as active.
+        lock.publish_ready(true)?;
+        lock.ready = true;
         Ok(lock)
+    }
+
+    /// Publish or clear the lock-ready marker on the root window.
+    ///
+    /// The value is the lock window id. A caller must verify that the window
+    /// still exists: a killed locker leaves the property behind when its X
+    /// connection closes, but its window does not.
+    fn publish_ready(&self, ready: bool) -> Result<()> {
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        let atom = self
+            .surface
+            .c
+            .intern_atom(false, b"_NIRU_LOCK_READY")?
+            .reply()?
+            .atom;
+        if ready {
+            self.surface.c.change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                root,
+                atom,
+                x11rb::protocol::xproto::AtomEnum::WINDOW,
+                &[self.surface.win],
+            )?;
+        } else {
+            let _ = self.surface.c.delete_property(root, atom);
+        }
+        self.surface.c.flush()?;
+        Ok(())
     }
 
     /// Ask to be told when the stacking order changes.
@@ -505,6 +542,8 @@ impl Lock {
                 // Accepted: give the keyboard back, then release the grabs so
                 // the session can continue.
                 let _ = self.tell_wm_locked(false);
+                let _ = self.publish_ready(false);
+                self.ready = false;
                 self.surface.release_input()?;
                 // An active keyboard grab swallows synthetic key events, and
                 // those are how the idle clock is told the user is here.

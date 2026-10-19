@@ -66,6 +66,22 @@ fn later_overlays_cannot_cover_the_lock() {
             .unwrap(),
     );
     let lock = lock_window(&c, root);
+    // Readiness is explicit and names the lock window; it is not inferred
+    // from a process id.
+    let ready_atom = c
+        .intern_atom(false, b"_NIRU_LOCK_READY")
+        .unwrap()
+        .reply()
+        .unwrap()
+        .atom;
+    let ready = c
+        .get_property(false, root, ready_atom, AtomEnum::WINDOW, 0, 1)
+        .unwrap()
+        .reply()
+        .unwrap()
+        .value32()
+        .and_then(|mut v| v.next());
+    assert_eq!(ready, Some(lock), "the lock did not publish readiness");
     let overlay = c.generate_id().unwrap();
     c.create_window(
         0,
