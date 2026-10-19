@@ -36,7 +36,7 @@ Password characters, keycodes and modifiers are never logged.
 
 ## Current behaviour
 
-**0.16.6:** verified keyboard/pointer grabs before displaying the prompt; continuous
+**0.16.7:** follows the suite theme selected in `~/.config/niruwm/config.toml` for content colours (user theme files take precedence), while keeping the opaque black background. **0.16.6:** verified keyboard/pointer grabs before displaying the prompt; continuous
 input isolation after a wrong password; authentication on one worker while X11
 remains responsive; restacking and opaque coverage follow display changes. The
 prompt stays on its selected physical output and falls back if that output leaves.
