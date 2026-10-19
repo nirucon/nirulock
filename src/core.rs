@@ -6,8 +6,8 @@
 //! not.
 //!
 //! The code is duplicated deliberately: each repository builds on its own with
-//! no private dependency, which keeps installation simple. The two copies are
-//! kept identical; `tests/identical.sh` compares their checksums.
+//! no private dependency, which keeps installation simple. Lock-specific coverage
+//! and resource handling are maintained here independently of the saver.
 
 use ab_glyph::{Font, ScaleFont};
 use x11rb::{
@@ -319,6 +319,7 @@ impl Surface {
         c.create_cursor(blank, shape, shape, 0, 0, 0, 0, 0, 0, 0, 0)?;
         c.change_window_attributes(win, &ChangeWindowAttributesAux::new().cursor(blank))?;
         c.free_cursor(blank)?;
+        c.free_pixmap(shape)?;
         c.flush()?;
         Ok(Self {
             c,
@@ -330,6 +331,52 @@ impl Surface {
             gc,
             back,
         })
+    }
+
+    /// Resize coverage first, then prepare a fully initialized replacement buffer.
+    /// A failed allocation leaves the expanded window opaque, not the desktop.
+    pub fn resize(&mut self, width: u16, height: u16) -> crate::Result<bool> {
+        let geometry = self.c.get_geometry(self.win)?.reply()?;
+        if geometry.x != 0
+            || geometry.y != 0
+            || geometry.width != width
+            || geometry.height != height
+        {
+            self.c
+                .configure_window(
+                    self.win,
+                    &ConfigureWindowAux::new()
+                        .x(0)
+                        .y(0)
+                        .width(u32::from(width))
+                        .height(u32::from(height)),
+                )?
+                .check()?;
+        }
+        if (width, height) == (self.width, self.height) {
+            return Ok(false);
+        }
+        let back = self.c.generate_id()?;
+        self.c
+            .create_pixmap(self.depth, back, self.win, width, height)?
+            .check()?;
+        self.c
+            .change_gc(self.gc, &ChangeGCAux::new().foreground(0))?;
+        self.c.poly_fill_rectangle(
+            back,
+            self.gc,
+            &[Rectangle {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }],
+        )?;
+        let old = std::mem::replace(&mut self.back, back);
+        self.width = width;
+        self.height = height;
+        self.c.free_pixmap(old)?;
+        Ok(true)
     }
 
     /// Fill the backing pixmap with a solid colour.

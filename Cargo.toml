@@ -1,6 +1,6 @@
 [package]
 name = "nirulock"
-version = "0.16.5"
+version = "0.16.6"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -8,12 +8,13 @@ description = "Niru Noir lock screen for X11"
 repository = "https://github.com/nirucon/nirulock"
 
 [dependencies]
-x11rb = { version = "0.13", features = ["screensaver"] }
+x11rb = { version = "0.13", features = ["screensaver", "randr"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 indexmap = "=2.7.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ab_glyph = "0.2"
+libc = "0.2"
 
 [profile.release]
 lto = true

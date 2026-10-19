@@ -5,8 +5,8 @@
 //! password is accepted by PAM.
 //!
 //! Security properties, in order of importance:
-//!   1. The window is override-redirect and full-screen, so no window manager
-//!      can move, resize, focus or cover it.
+//!   1. An opaque override-redirect surface follows root geometry, with stacking
+//!      repairs for ordinary session windows. The prompt follows one output.
 //!   2. Every key press and button press on the screen is grabbed, so focus
 //!      cannot be moved to another window by clicking.
 //!   3. PAM decides; a missing PAM, a failed conversation or an unexpected
@@ -14,6 +14,7 @@
 
 mod config;
 mod core;
+mod display;
 mod palette;
 mod pam;
 
@@ -51,10 +52,15 @@ impl From<&str> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 use chrono::Local;
-use std::time::{Duration, Instant};
+use std::{
+    io::Write,
+    os::{fd::AsRawFd, unix::net::UnixStream},
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 use x11rb::{
     connection::Connection,
-    protocol::{xproto::*, Event},
+    protocol::{randr::ConnectionExt as _, xproto::*, Event},
     wrapper::ConnectionExt as _,
 };
 
@@ -66,6 +72,34 @@ enum State {
     Wrong,
 }
 
+struct Authentication {
+    result: mpsc::Receiver<std::result::Result<bool, String>>,
+    wake: UnixStream,
+    worker: std::thread::JoinHandle<()>,
+}
+
+impl Authentication {
+    fn start(user: String, password: String) -> Result<Self> {
+        let (wake, mut notify) = UnixStream::pair()?;
+        wake.set_nonblocking(true)?;
+        notify.set_nonblocking(true)?;
+        let (send, result) = mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("nirulock-auth".into())
+            .spawn(move || {
+                let outcome = pam::authenticate(&user, &password);
+                drop(password);
+                let _ = send.send(outcome);
+                let _ = notify.write_all(&[1]);
+            })?;
+        Ok(Self {
+            result,
+            wake,
+            worker,
+        })
+    }
+}
+
 struct Lock {
     surface: core::Surface,
     cfg: config::Config,
@@ -75,6 +109,10 @@ struct Lock {
     started: Instant,
     message: String,
     wm_notified: bool,
+    authentication: Option<Authentication>,
+    wrong_until: Option<Instant>,
+    prompt_output: Option<u32>,
+    prompt_area: display::Area,
 }
 
 impl Drop for Lock {
@@ -95,6 +133,12 @@ impl Lock {
         }
         let setup = surface.c.setup().clone();
         let renderer = core::TextRenderer::new(&font, cfg.font_size, &setup)?;
+        let prompt_area = display::Area {
+            x: 0,
+            y: 0,
+            width: surface.width,
+            height: surface.height,
+        };
         let mut lock = Self {
             surface,
             cfg,
@@ -104,6 +148,10 @@ impl Lock {
             started: Instant::now(),
             message: String::new(),
             wm_notified: false,
+            authentication: None,
+            wrong_until: None,
+            prompt_output: None,
+            prompt_area,
         };
         lock.trace("starting");
         // Grab the pointer first, then ask the window manager to let go of its
@@ -113,19 +161,16 @@ impl Lock {
         // on top until each of its keys was pressed -- which is why Super had
         // to be held to type a password.
         lock.grab_pointer()?;
-        // Tell the window manager before taking the keyboard. It holds a
-        // grab on every key it binds, and until it has released them its grabs
-        // win over the lock's: the user then had to hold Super to reach the
-        // lock screen at all, because Super was the one modifier whose grab
-        // the lock could displace. Order matters, and so does waiting: the
-        // message is a round trip, and the client processes it before the
-        // next request from us.
+        // Notify before acquiring input. The X server round trip does not prove
+        // that the WM processed the message; verified active grabs are required.
         lock.tell_wm_locked(true)?;
         lock.wm_notified = true;
         // Above everything from the first frame: the bar and any
         // override-redirect window are already on screen when a lock starts.
         lock.grab_input()?;
+        lock.watch_stacking()?;
         lock.keep_on_top()?;
+        lock.update_prompt_area();
         lock.draw()?;
         Ok(lock)
     }
@@ -140,8 +185,22 @@ impl Lock {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
         self.surface.c.change_window_attributes(
             root,
-            &ChangeWindowAttributesAux::new().event_mask(EventMask::SUBSTRUCTURE_NOTIFY),
+            &ChangeWindowAttributesAux::new()
+                .event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY),
         )?;
+        // Root ConfigureNotify remains the fallback on servers without RandR.
+        let _ = self
+            .surface
+            .c
+            .randr_select_input(
+                root,
+                x11rb::protocol::randr::NotifyMask::SCREEN_CHANGE
+                    | x11rb::protocol::randr::NotifyMask::CRTC_CHANGE
+                    | x11rb::protocol::randr::NotifyMask::OUTPUT_CHANGE
+                    | x11rb::protocol::randr::NotifyMask::RESOURCE_CHANGE,
+            )
+            .ok()
+            .and_then(|r| r.check().ok());
         self.surface.c.flush()?;
         self.trace("watching the stacking order");
         Ok(())
@@ -301,26 +360,38 @@ impl Lock {
     /// any override-redirect window that was there before.
     fn keep_on_top(&mut self) -> Result<()> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
-        self.surface.c.configure_window(
-            self.surface.win,
-            &ConfigureWindowAux::new()
-                .x(0)
-                .y(0)
-                .width(u32::from(self.surface.width))
-                .height(u32::from(self.surface.height))
-                .stack_mode(StackMode::ABOVE),
-        )?;
+        let geometry = self.surface.c.get_geometry(root)?.reply()?;
+        self.surface.resize(geometry.width, geometry.height)?;
         self.surface.c.map_window(self.surface.win)?;
-        let _ = root;
+        // Only change the stack if necessary: reconfiguring in response to our
+        // own ConfigureNotify otherwise creates a self-triggered event storm.
+        let children = self.surface.c.query_tree(root)?.reply()?.children;
+        if children.last() != Some(&self.surface.win) {
+            self.surface.c.configure_window(
+                self.surface.win,
+                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+            )?;
+        }
         self.surface.c.flush()?;
         Ok(())
+    }
+
+    fn update_prompt_area(&mut self) {
+        let root = self.surface.c.setup().roots[self.surface.screen_num].root;
+        let fallback = display::Area {
+            x: 0,
+            y: 0,
+            width: self.surface.width,
+            height: self.surface.height,
+        };
+        (self.prompt_output, self.prompt_area) =
+            display::prompt_area(&self.surface.c, root, self.prompt_output, fallback);
     }
 
     fn draw(&mut self) -> Result<()> {
         let pal = self.cfg.palette.clone();
         self.surface.clear(pal.background)?;
-        let centre = (self.surface.width / 2) as i16;
-        let mid = (self.surface.height / 2) as i16;
+        let (centre, mid) = self.prompt_area.centre();
         let line = self.renderer.line_height();
 
         // Clock, then hostname, then the lock caption.
@@ -396,10 +467,39 @@ impl Lock {
     }
 
     fn submit(&mut self) -> Result<()> {
+        if self.authentication.is_some() {
+            return Ok(());
+        }
         let user = pam::current_user();
-        self.state = State::Checking;
-        self.draw()?;
-        match pam::authenticate(&user, &self.input) {
+        let password = std::mem::take(&mut self.input);
+        match Authentication::start(user, password) {
+            Ok(worker) => {
+                self.authentication = Some(worker);
+                self.state = State::Checking;
+            }
+            Err(_) => {
+                self.state = State::Wrong;
+                self.message = "cannot start authentication".into();
+                self.wrong_until = Some(Instant::now() + Duration::from_millis(600));
+            }
+        }
+        self.draw()
+    }
+
+    fn check_authentication(&mut self) -> Result<bool> {
+        let Some(authentication) = &self.authentication else {
+            return Ok(false);
+        };
+        let outcome = match authentication.result.try_recv() {
+            Ok(outcome) => outcome,
+            Err(mpsc::TryRecvError::Empty) => return Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => Err("authentication worker stopped".into()),
+        };
+        if let Some(authentication) = self.authentication.take() {
+            // The worker's only remaining work is a nonblocking one-byte wakeup.
+            let _ = authentication.worker.join();
+        }
+        match outcome {
             Ok(true) => {
                 self.trace("password accepted");
                 // Accepted: give the keyboard back, then release the grabs so
@@ -427,14 +527,9 @@ impl Lock {
                 self.input.clear();
             }
         }
-        // A short visible failure before returning to the prompt.
-        self.draw()?;
-        std::thread::sleep(Duration::from_millis(600));
-        // Keep the verified active grab throughout a failed attempt. Releasing
-        // it even briefly could deliver subsequent typing to desktop clients.
-        self.state = State::Prompt;
-        self.draw()?;
-        Ok(())
+        // Keep event handling and verified grabs active during failure feedback.
+        self.wrong_until = Some(Instant::now() + Duration::from_millis(600));
+        Ok(true)
     }
 
     /// Reset X11's real idle clock; synthetic root key events do not do that.
@@ -451,6 +546,13 @@ impl Lock {
         // is accepted. Announcing each key the lock screen takes keeps the
         // clock honest the whole time, not only when it unlocks.
         self.touch_idle_clock();
+        if self.state == State::Checking {
+            return Ok(true);
+        }
+        if self.state == State::Wrong {
+            self.state = State::Prompt;
+            self.wrong_until = None;
+        }
         // Map the keycode to a printable character through the keyboard map.
         let sym = self.keystring(e)?;
         match sym.as_str() {
@@ -531,92 +633,120 @@ impl Lock {
 
     fn run(&mut self) -> Result<()> {
         let mut minute = String::new();
-        // An established lock has no unauthenticated timer or environment bypass.
-        // Watch the server for as long as the lock is up. Compositors can
-        // reset their stacking order after the lock window was raised (picom
-        // recreates windows when it restarts, for one), and then the desktop
-        // is visible through the lock even though its keyboard is still
-        // grabbed. Re-asserting the place is cheap and is the only thing that
-        // cannot go wrong quietly.
-        self.watch_stacking()?;
+        let mut away_minute = u64::MAX;
+        let mut repair_display = false;
+        let mut pending = None;
         loop {
-            let now = Local::now();
-            let m = now.format("%Y-%m-%d %H:%M").to_string();
-            if m != minute {
-                minute = m;
-                self.draw()?;
-            }
-            let ready = wait_readable(
-                std::os::fd::AsRawFd::as_raw_fd(self.surface.c.stream()),
-                1000,
-            );
-            if ready {
-                // `poll_for_event` stops at the first error, and every rejected
-                // key grab on a busy window manager is one. A lock screen must
-                // not stop reading keys because the server refused a grab it
-                // did not need, so errors between events are drained here.
-                loop {
-                    match self.surface.c.poll_for_event() {
-                        Ok(Some(Event::CirculateNotify(_))) => {
-                            self.keep_on_top()?;
+            let mut repaint = self.check_authentication()?;
+            let mut drained = false;
+            // Bound each batch so a burst cannot starve authentication or repair.
+            for _ in 0..256 {
+                let event = match pending.take() {
+                    Some(event) => Ok(Some(event)),
+                    None => self.surface.c.poll_for_event(),
+                };
+                match event {
+                    Ok(Some(Event::KeyPress(e))) => {
+                        if let Err(e) = self.handle_key(e) {
+                            eprintln!("nirulock: input handling: {e}");
                         }
-                        Ok(Some(Event::ConfigureNotify(e))) if e.window == self.surface.win => {
-                            // Something reconfigured the lock window itself.
-                            self.keep_on_top()?;
-                        }
-                        Ok(Some(event)) => match event {
-                            Event::KeyPress(e) => {
-                                self.handle_key(e)?;
-                            }
-                            Event::Expose(_) => self.draw()?,
-                            Event::MappingNotify(_) => {
-                                // The keymap changed under us (setxkbmap, layout
-                                // switch). x11rb refreshes its own cache; the next
-                                // key press reads the new mapping.
-                                self.surface.c.flush()?;
-                            }
-                            Event::Error(e) => eprintln!("nirulock: X11 error: {e:?}"),
-                            _ => {}
-                        },
-                        Ok(None) => break,
-                        // Every decode error already has an event next in
-                        // line, so draining is safe.
-                        // A closed connection is the one error that means
-                        // stop; anything else arrives as an event next.
-                        Err(x11rb::errors::ConnectionError::IoError(e)) => {
-                            return Err(format!("lost the X connection: {e}").into());
-                        }
-                        Err(e) => eprintln!("nirulock: {e}"),
                     }
-                }
-            } else {
-                // Redraw the away counter once a minute even without input.
-                if self.started.elapsed().as_secs() % 60 == 0 {
-                    self.draw()?;
+                    Ok(Some(Event::Expose(_))) => repaint = true,
+                    Ok(Some(Event::MapNotify(_)))
+                    | Ok(Some(Event::CirculateNotify(_)))
+                    | Ok(Some(Event::ConfigureNotify(_)))
+                    | Ok(Some(Event::RandrScreenChangeNotify(_)))
+                    | Ok(Some(Event::RandrNotify(_))) => repair_display = true,
+                    Ok(Some(Event::Error(e))) => eprintln!("nirulock: X11 error: {e:?}"),
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        drained = true;
+                        break;
+                    }
+                    Err(x11rb::errors::ConnectionError::IoError(e)) => {
+                        return Err(format!("lost the X connection: {e}").into())
+                    }
+                    Err(e) => eprintln!("nirulock: {e}"),
                 }
             }
+            if repair_display {
+                match self.keep_on_top() {
+                    Ok(()) => {
+                        self.update_prompt_area();
+                        repair_display = false;
+                        repaint = true;
+                    }
+                    Err(e) => eprintln!("nirulock: coverage repair will retry: {e}"),
+                }
+            }
+            let m = Local::now().format("%Y-%m-%d %H:%M").to_string();
+            let away = self.started.elapsed().as_secs() / 60;
+            if m != minute || away != away_minute {
+                minute = m;
+                away_minute = away;
+                repaint = true;
+            }
+            if self
+                .wrong_until
+                .is_some_and(|until| Instant::now() >= until)
+            {
+                self.wrong_until = None;
+                self.state = State::Prompt;
+                repaint = true;
+            }
+            if repaint {
+                // Rendering/resource errors never dismiss an established lock.
+                if let Err(e) = self.draw() {
+                    eprintln!("nirulock: repaint: {e}");
+                }
+            }
+            self.surface.c.flush()?;
+            if !drained {
+                continue;
+            }
+            // Round trips above may have queued events in x11rb, away from the fd.
+            pending = self.surface.c.poll_for_event()?;
+            if pending.is_some() {
+                continue;
+            }
+            let timeout = self
+                .wrong_until
+                .map(|until| {
+                    until
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()
+                        .clamp(1, 1000) as i32
+                })
+                .unwrap_or(1000);
+            wait_readable(
+                self.surface.c.stream().as_raw_fd(),
+                self.authentication
+                    .as_ref()
+                    .map(|auth| auth.wake.as_raw_fd()),
+                timeout,
+            );
         }
     }
 }
 
-/// Block until the X socket is readable or the timeout expires.
-fn wait_readable(fd: std::os::fd::RawFd, timeout_ms: i32) -> bool {
-    #[repr(C)]
-    struct PollFd {
-        fd: std::os::fd::RawFd,
-        events: i16,
-        revents: i16,
+/// Wait on X and the bounded authentication worker without periodic auth polling.
+fn wait_readable(fd: std::os::fd::RawFd, auth_fd: Option<std::os::fd::RawFd>, timeout_ms: i32) {
+    let mut fds = [
+        libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: auth_fd.unwrap_or(-1),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    // SAFETY: two valid pollfd values; poll ignores a negative unused fd.
+    unsafe {
+        libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms);
     }
-    extern "C" {
-        fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
-    }
-    let mut pfd = PollFd {
-        fd,
-        events: 1,
-        revents: 0,
-    };
-    // SAFETY: one valid pollfd for the duration of the call.
-    unsafe { poll(&mut pfd, 1, timeout_ms) > 0 }
 }
 
 fn main() {

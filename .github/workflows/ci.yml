@@ -44,7 +44,7 @@ jobs:
           INNER
           sudo -u tester sh /tmp/lock-test.sh
       - name: Legacy timeout and input isolation regression
-        run: xvfb-run -a cargo test --locked --test x11 -- --ignored --test-threads=1
+        run: xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo test --locked --test x11 -- --ignored --test-threads=1
       - name: Shellcheck
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
