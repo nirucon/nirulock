@@ -18,6 +18,8 @@ BINDIR="$PREFIX/bin"
 CONFDIR="${XDG_CONFIG_HOME:-$HOME/.config}/niruui"
 STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/nirulock"
 MANIFEST="$STATEDIR/manifest.tsv"
+PAM_DIR="${NIRULOCK_PAM_DIR:-/etc/pam.d}"
+PAM_FILE="$PAM_DIR/nirulock"
 
 die() { printf 'nirulock install: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
@@ -41,6 +43,9 @@ Usage: ./install.sh [options]
   --check       verify the installation; make no changes
   --uninstall   remove the installed binary
   --prefix DIR  install under DIR (default ~/.local)
+
+Environment:
+  NIRULOCK_PAM_DIR  PAM service directory (default /etc/pam.d)
 EOF
 }
 
@@ -167,13 +172,13 @@ install_pam_service() {
     say "Nirulock will fall back to the 'login' service."
     return 0
   fi
-  dest=/etc/pam.d/nirulock
+  dest="$PAM_FILE"
   guard_nirux "$dest"
   if [ -f "$dest" ] && [ "$(sha256 "$src")" = "$(sha256 "$dest")" ]; then
     say "PAM service already installed: $dest"
     return 0
   fi
-  if [ -w /etc/pam.d ] 2>/dev/null; then
+  if [ -w "$PAM_DIR" ] 2>/dev/null; then
     install -m 0644 "$src" "$dest"
   elif command -v sudo >/dev/null 2>&1; then
     say "Installing the PAM service to $dest (sudo):"
@@ -189,10 +194,10 @@ install_pam_service() {
 
 check() {
   ok=0
-  if [ -f /etc/pam.d/nirulock ]; then
-    say "OK   /etc/pam.d/nirulock"
+  if [ -f "$PAM_FILE" ]; then
+    say "OK   $PAM_FILE"
   else
-    say "WARN no /etc/pam.d/nirulock (falls back to the login service)"
+    say "WARN no $PAM_FILE (falls back to the login service)"
   fi
   if [ -x "$BINDIR/$BIN" ]; then say "OK   $BINDIR/$BIN"; else say "FAIL missing $BINDIR/$BIN"; ok=1; fi
   "$BINDIR/$BIN" --version || ok=1
@@ -204,7 +209,7 @@ uninstall() {
   while IFS="$(printf '\t')" read -r path hash; do
     [ -n "$path" ] || continue
     case "$path" in
-      "$BINDIR/$BIN"|/etc/pam.d/nirulock)
+      "$BINDIR/$BIN"|"$PAM_FILE")
         guard_nirux "$path"
         [ -f "$path" ] || continue
         if [ "$(sha256 "$path")" != "$hash" ]; then
@@ -238,7 +243,7 @@ cd "$(dirname "$0")"
 case "$MODE" in
   install|build)
     guard_nirux "$BINDIR/$BIN"
-    guard_nirux /etc/pam.d/nirulock
+    guard_nirux "$PAM_FILE"
     ;;
   uninstall) guard_nirux "$BINDIR/$BIN" ;;
 esac

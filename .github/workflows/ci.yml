@@ -67,5 +67,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev pkg-config
-      - run: cargo build --release --locked --bin pamcheck
+      - run: cargo build --release --locked --bin pamcheck --bin nirulock
       - run: docker run --rm -e NIRU_PAM_TEST_CONTAINER=1 -v "$PWD":/src:ro '${{ matrix.image }}' sh /src/tests/pam-distro.sh '${{ matrix.distro }}'
