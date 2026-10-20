@@ -46,6 +46,68 @@ fn builtin_palette(name: &str) -> Option<palette::Palette> {
     })
 }
 
+/// Versioned appearance contract. Invalid input is ignored; the working theme
+/// stays in effect. The lock always renders on opaque black.
+fn appearance_value(base: &Path) -> Option<toml::Value> {
+    let path = base.join("niruwm/appearance.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!("nirulock: {}: {e}", path.display());
+            return None;
+        }
+    };
+    let value: toml::Value = match text.parse() {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("nirulock: {}: {e}", path.display());
+            return None;
+        }
+    };
+    if value.get("schema").and_then(|v| v.as_integer()) != Some(1) {
+        eprintln!(
+            "nirulock: {}: unsupported appearance schema",
+            path.display()
+        );
+        return None;
+    }
+    if let Some(colors) = value.get("colors") {
+        let Some(colors) = colors.as_table() else {
+            eprintln!("nirulock: {}: colors must be a table", path.display());
+            return None;
+        };
+        for colour in colors.values() {
+            let Some(text) = colour.as_str() else {
+                eprintln!("nirulock: {}: colours must be strings", path.display());
+                return None;
+            };
+            if palette::parse_hex(text).is_none() {
+                eprintln!("nirulock: {}: invalid colour {text:?}", path.display());
+                return None;
+            }
+        }
+    }
+    if let Some(size) = value.get("font").and_then(|font| font.get("size")) {
+        if !size
+            .as_float()
+            .is_some_and(|size| size.is_finite() && size > 0.0)
+        {
+            eprintln!("nirulock: {}: font.size must be positive", path.display());
+            return None;
+        }
+    }
+    Some(value)
+}
+
+fn appearance_colour(appearance: &toml::Value, key: &str) -> Option<String> {
+    appearance
+        .get("colors")?
+        .get(key)?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// Read the suite's selected theme without requiring it to exist.
 ///
 /// A user theme in `~/.config/niruwm/themes/NAME.toml` wins over the built-in
@@ -59,6 +121,25 @@ fn suite_palette_from(base: &Path) -> Option<palette::Palette> {
         .and_then(|v| v.as_str())
         .unwrap_or("niru-noir");
     let file = base.join("niruwm/themes").join(format!("{name}.toml"));
+    if !file.exists() {
+        if let Some(appearance) = appearance_value(base) {
+            let mut result = builtin_palette(name).unwrap_or_default();
+            result.background = 0x000000;
+            for (field, key) in [
+                (&mut result.foreground, "foreground"),
+                (&mut result.muted, "muted"),
+                (&mut result.border, "border"),
+                (&mut result.focus, "focus"),
+            ] {
+                if let Some(colour) =
+                    appearance_colour(&appearance, key).and_then(|s| palette::parse_hex(&s))
+                {
+                    *field = colour;
+                }
+            }
+            return Some(result);
+        }
+    }
     if let Ok(text) = std::fs::read_to_string(&file) {
         if let Ok(theme) = text.parse::<toml::Value>() {
             let mut result = builtin_palette(name).unwrap_or_default();
@@ -80,13 +161,16 @@ fn suite_palette_from(base: &Path) -> Option<palette::Palette> {
     builtin_palette(name)
 }
 
-fn suite_palette() -> Option<palette::Palette> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+fn config_home() -> std::path::PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-        });
-    suite_palette_from(&base)
+        })
+}
+
+fn suite_palette() -> Option<palette::Palette> {
+    suite_palette_from(&config_home())
 }
 
 impl Default for Config {
@@ -128,7 +212,10 @@ impl Config {
         let path = config_file();
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let empty = toml::Value::Table(Default::default());
+                return Self::from_value_with(&empty, suite_palette());
+            }
             // An unreadable or damaged settings file must never keep the screen
             // unlocked. Defaults are good enough to show the lock screen, so
             // say what happened and carry on with them.
@@ -196,6 +283,26 @@ impl Config {
                 border: get("border", d.border),
                 focus: get("focus", d.focus),
             };
+        }
+        if let Some(appearance) = appearance_value(&config_home()) {
+            if v.get("font_size").is_none() {
+                if let Some(size) = appearance
+                    .get("font")
+                    .and_then(|font| font.get("size"))
+                    .and_then(|size| size.as_float())
+                {
+                    cfg.font_size = size as f32;
+                }
+            }
+            if v.get("font_path").is_none() {
+                if let Some(path) = appearance
+                    .get("font")
+                    .and_then(|font| font.get("path"))
+                    .and_then(|path| path.as_str())
+                {
+                    cfg.font_path = Some(path.to_string());
+                }
+            }
         }
         if !(8.0..=400.0).contains(&cfg.font_size) {
             return Err("font_size out of range".into());
