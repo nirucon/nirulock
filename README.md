@@ -36,7 +36,10 @@ Password characters, keycodes and modifiers are never logged.
 
 ## Current behaviour
 
-**0.16.8:** publishes an explicit `_NIRU_LOCK_READY` marker naming the lock window after verified grabs and mapping, and clears it on unlock. `niructl suspend` refuses to suspend unless this readiness contract is satisfied. **0.16.7:** follows the suite theme selected in `~/.config/niruwm/config.toml` for content colours (user theme files take precedence), while keeping the opaque black background. **0.16.6:** verified keyboard/pointer grabs before displaying the prompt; continuous
+Publishes `_NIRU_LOCK_READY` after verified grabs and mapping, and clears it on
+unlock. `niructl suspend` requires this readiness. Content colours follow the
+selected suite theme (user theme files take precedence); the background stays
+opaque black. Verified keyboard/pointer grabs before displaying the prompt; continuous
 input isolation after a wrong password; authentication on one worker while X11
 remains responsive; restacking and opaque coverage follow display changes. The
 prompt stays on its selected physical output and falls back if that output leaves.

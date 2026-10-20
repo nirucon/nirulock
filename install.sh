@@ -1,5 +1,5 @@
 #!/bin/sh
-# Niruscreensaver installer.
+# Nirulock installer.
 #
 #   ./install.sh          install the released static binary
 #   ./install.sh --build  build from this checkout (needs Rust)
@@ -10,7 +10,7 @@
 # programs.
 set -eu
 
-VERSION="0.16.6"
+VERSION="0.16.8"
 REPO="${NIRULOCK_REPO:-nirucon/nirulock}"
 BIN="nirulock"
 PREFIX="${NIRULOCK_PREFIX:-$HOME/.local}"
@@ -21,6 +21,17 @@ MANIFEST="$STATEDIR/manifest.tsv"
 
 die() { printf 'nirulock install: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
+
+guard_nirux() {
+  if [ -L "$1" ]; then
+    case "$(readlink "$1")" in
+      *share/nirux/current/bin/*) die "managed by NIRUX: $1 (use nirux update)" ;;
+    esac
+  fi
+  if [ -f "$1" ] && grep -q '^# NIRUX owner:' "$1"; then
+    die "managed by NIRUX: $1 (use nirux update)"
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -55,6 +66,7 @@ sha256() {
 
 put() {
   src="$1"; dest="$2"; mode="${3:-0755}"
+  guard_nirux "$dest"
   mkdir -p "$(dirname "$dest")"
   install -m "$mode" "$src" "$dest.new"
   mv -f "$dest.new" "$dest"
@@ -85,8 +97,14 @@ install_release() {
   actual="$(sha256 "$dl/$BIN")"
   [ "$expected" = "$actual" ] || die "checksum mismatch for $BIN"
   chmod 0755 "$dl/$BIN"
+  # Authentication policy must come from the selected release, not this checkout.
+  pam_distro=$(distro)
+  case "$pam_distro" in arch|debian|void) ;; *) die "unsupported PAM distribution: $pam_distro" ;; esac
+  fetch "$base/pam-$pam_distro" "$dl/pam" || die "cannot download PAM service"
+  expected="$(awk -v n="pam-$pam_distro" '$2 == n {print $1}' "$dl/SHA256SUMS")"
+  [ -n "$expected" ] && [ "$expected" = "$(sha256 "$dl/pam")" ] || die "PAM checksum mismatch"
+  install_pam_service "$dl/pam"
   put "$dl/$BIN" "$BINDIR/$BIN"
-  install_pam_service
   say "Installed $BIN $("$BINDIR/$BIN" --version | awk '{print $2}') in $BINDIR"
   say "Settings: $CONFDIR/lock.toml (created when you first edit it)"
   if ! ldconfig -p 2>/dev/null | grep -q libpam; then
@@ -143,13 +161,14 @@ distro() {
 
 install_pam_service() {
   d="$(distro)"
-  src="$(dirname "$0")/pam/$d/nirulock"
+  src="${1:-$(dirname "$0")/pam/$d/nirulock}"
   if [ ! -f "$src" ]; then
     say "Note: no PAM service file for this distribution ($d)."
     say "Nirulock will fall back to the 'login' service."
     return 0
   fi
   dest=/etc/pam.d/nirulock
+  guard_nirux "$dest"
   if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
     say "PAM service already installed: $dest"
     return 0
@@ -164,6 +183,7 @@ install_pam_service() {
     say "Install it yourself: copy pam/$d/nirulock to $dest"
     return 0
   fi
+  record "$dest" "$(sha256 "$dest")"
   say "Installed the PAM service: $dest"
 }
 
@@ -180,16 +200,20 @@ check() {
 }
 
 uninstall() {
-  if [ -f /etc/pam.d/nirulock ]; then
-    if [ -w /etc/pam.d ]; then rm -f /etc/pam.d/nirulock
-    elif command -v sudo >/dev/null 2>&1; then sudo rm -f /etc/pam.d/nirulock; fi
-    say "Removed /etc/pam.d/nirulock"
-  fi
   [ -f "$MANIFEST" ] || { say "Nothing to remove."; return 0; }
-  while IFS="$(printf '\t')" read -r path _hash; do
+  while IFS="$(printf '\t')" read -r path hash; do
     [ -n "$path" ] || continue
     case "$path" in
-      */nirulock) [ -e "$path" ] && rm -f "$path" && say "Removed $path" ;;
+      "$BINDIR/$BIN"|/etc/pam.d/nirulock)
+        guard_nirux "$path"
+        [ -f "$path" ] || continue
+        if [ "$(sha256 "$path")" != "$hash" ]; then
+          say "Keeping modified file: $path"
+          continue
+        fi
+        if [ -w "$(dirname "$path")" ]; then rm -f "$path"
+        else sudo rm -f "$path"; fi
+        say "Removed $path" ;;
       *) say "Skipping unexpected entry: $path" ;;
     esac
   done < "$MANIFEST"
@@ -211,6 +235,13 @@ while [ $# -gt 0 ]; do
 done
 
 cd "$(dirname "$0")"
+case "$MODE" in
+  install|build)
+    guard_nirux "$BINDIR/$BIN"
+    guard_nirux /etc/pam.d/nirulock
+    ;;
+  uninstall) guard_nirux "$BINDIR/$BIN" ;;
+esac
 case "$MODE" in
   install) install_release ;;
   build) build_local ;;
