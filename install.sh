@@ -169,7 +169,7 @@ install_pam_service() {
   fi
   dest=/etc/pam.d/nirulock
   guard_nirux "$dest"
-  if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+  if [ -f "$dest" ] && [ "$(sha256 "$src")" = "$(sha256 "$dest")" ]; then
     say "PAM service already installed: $dest"
     return 0
   fi
