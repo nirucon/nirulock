@@ -114,6 +114,7 @@ struct Lock {
     prompt_output: Option<u32>,
     prompt_area: display::Area,
     ready: bool,
+    caps: bool,
 }
 
 impl Drop for Lock {
@@ -143,6 +144,16 @@ impl Lock {
             width: surface.width,
             height: surface.height,
         };
+        let caps = {
+            let root = surface.c.setup().roots[surface.screen_num].root;
+            surface
+                .c
+                .query_pointer(root)
+                .ok()
+                .and_then(|r| r.reply().ok())
+                .map(|r| r.mask.contains(KeyButMask::LOCK))
+                .unwrap_or(false)
+        };
         let mut lock = Self {
             surface,
             cfg,
@@ -157,6 +168,7 @@ impl Lock {
             prompt_output: None,
             prompt_area,
             ready: false,
+            caps,
         };
         lock.trace("starting");
         // Grab the pointer first, then ask the window manager to let go of its
@@ -499,6 +511,19 @@ impl Lock {
             colour,
             pal.background,
         )?;
+        if self.caps {
+            self.renderer.draw_centred(
+                &self.surface.c,
+                self.surface.gc,
+                self.surface.back,
+                self.surface.depth,
+                centre,
+                mid + line * 6,
+                "Caps Lock",
+                pal.focus,
+                pal.background,
+            )?;
+        }
         self.surface.present()?;
         Ok(())
     }
@@ -578,6 +603,7 @@ impl Lock {
     }
 
     fn handle_key(&mut self, e: KeyPressEvent) -> Result<bool> {
+        self.caps = e.state.contains(KeyButMask::LOCK);
         // Never log keycodes, modifiers, characters or password lengths.
         // The server does not start the X11 idle clock for keys it delivered
         // through a grab. On a machine whose idle timer locks after a short
@@ -649,11 +675,13 @@ impl Lock {
         if sym == 0 || sym == 0xfe03 {
             sym = syms.first().copied().unwrap_or(0);
         }
-        // Caps Lock swaps the case of alphabetic keysyms only.
+        // Caps Lock swaps the case of alphabetic keysyms only. Latin-1
+        // covers å ä ö and the other Swedish letters; ÷ and × are not letters.
         if lock {
-            if (0x61..=0x7a).contains(&sym) {
+            if (0x61..=0x7a).contains(&sym) || ((0xe0..=0xfe).contains(&sym) && sym != 0xf7) {
                 sym -= 0x20;
-            } else if (0x41..=0x5a).contains(&sym) {
+            } else if (0x41..=0x5a).contains(&sym) || ((0xc0..=0xde).contains(&sym) && sym != 0xd7)
+            {
                 sym += 0x20;
             }
         }

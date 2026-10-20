@@ -28,6 +28,9 @@ nirulock --config
 nirulock --version
 ```
 
+The lock shows a `Caps Lock` indicator when that modifier is active. AltGr
+and Latin-1 case conversion are part of password input.
+
 Settings: `$XDG_CONFIG_HOME/niruui/lock.toml` (default `~/.config/niruui/lock.toml`).
 Optional `font_path`, `font_size` and `[palette]` overrides are documented in
 [config.example.toml](config.example.toml). Diagnostics:
