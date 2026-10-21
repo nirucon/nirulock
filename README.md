@@ -1,14 +1,14 @@
-# Nirulock
+# NIRULOCK
 
-Native X11/PAM lock screen with a clock, hostname and away time in the Niru Noir
-style. Part of the [NIRUX desktop](https://github.com/nirucon/nirux); independently
-runnable on **Void glibc, Arch and Debian**. Personal software for the author's
-machines, public for others to try.
+Native X11/PAM lock screen for the NIRU desktop, with clock, hostname and away
+time in the active theme.
+
+Part of the [NIRUX suite](https://github.com/nirucon/nirux): [NIRUWM](https://github.com/nirucon/niruwm) · [NIRUBAR](https://github.com/nirucon/nirubar) · [NIRUSCREENSAVER](https://github.com/nirucon/niruscreensaver) · [NIRULOCK](https://github.com/nirucon/nirulock) · [NIRULAUNCHER](https://github.com/nirucon/nirulauncher) · [NIRUNOTIFY](https://github.com/nirucon/nirunotify) · [NIRUSHOT](https://github.com/nirucon/nirushot).
 
 ## Install
 
 Use [NIRUX](https://github.com/nirucon/nirux#install) for the complete desktop.
-Standalone x86_64/glibc releases require no Rust:
+Standalone x86_64/glibc releases need no Rust:
 
 ```sh
 git clone https://github.com/nirucon/nirulock
@@ -16,44 +16,47 @@ cd nirulock
 ./install.sh
 ```
 
-The installer requests sudo for `/etc/pam.d/nirulock`, which includes the system
-authentication stack. Source builds: `./install.sh --build` (Rust 1.75+, C linker,
-PAM development headers and a monospace font).
+The installer requests sudo to write `/etc/pam.d/nirulock`, which includes the
+system authentication stack. Source builds use `./install.sh --build` and need
+Rust 1.75+, a C linker, PAM development headers and a monospace font.
 
-## Use and settings
+## Use
 
 ```sh
-nirulock                 # or Super+Escape in NIRUWM
+nirulock
 nirulock --config
 nirulock --version
 ```
 
-The lock shows a `Caps Lock` indicator when that modifier is active. AltGr
-and Latin-1 case conversion are part of password input.
+Super+Escape locks in NIRUWM. The lock shows a Caps Lock indicator when active;
+AltGr and Latin-1 case conversion are supported for password input.
 
-Settings: `$XDG_CONFIG_HOME/niruui/lock.toml` (default `~/.config/niruui/lock.toml`).
-Optional `font_path`, `font_size` and `[palette]` overrides are documented in
-[config.example.toml](config.example.toml). Diagnostics:
-`$XDG_STATE_HOME/nirulock/trace.log` (default `~/.local/state/nirulock/trace.log`).
-Password characters, keycodes and modifiers are never logged.
+Settings live in `~/.config/niruui/lock.toml` (XDG respected). Optional
+`font_path`, `font_size` and `[palette]` overrides are shown in
+[config.example.toml](config.example.toml). Diagnostics are written to
+`~/.local/state/nirulock/trace.log`; password characters, keycodes and modifiers
+are never logged.
 
-## Current behaviour
+## Behaviour
 
-Publishes `_NIRU_LOCK_READY` after verified grabs and mapping, and clears it on
-unlock. `niructl suspend` requires this readiness. Content colours follow the
-selected suite theme (user theme files take precedence); the background stays
-opaque black. Verified keyboard/pointer grabs before displaying the prompt; continuous
-input isolation after a wrong password; authentication on one worker while X11
-remains responsive; restacking and opaque coverage follow display changes. The
-prompt stays on its selected physical output and falls back if that output leaves.
+Only successful PAM authentication unlocks. NIRULOCK publishes
+`_NIRU_LOCK_READY` after verified keyboard/pointer grabs and mapping, and clears
+it on unlock; `niructl suspend` requires that readiness. Content follows the
+selected suite theme on an opaque black background. The prompt stays on its
+selected output and falls back if that output disappears. Authentication runs on
+one worker while X11 remains responsive.
 
-Only successful PAM authentication unlocks. Escape clears input. Legacy timeout
-settings are ignored; update niruidle and log out/in to remove old timeout wrappers.
-Basic Swedish/US, Shift and AltGr input is supported; full compose/input-method
-support remains planned. X11 does not isolate the lock from hostile same-server clients.
+Basic Swedish/US, Shift and AltGr input is supported. Full compose/input-method
+support is not implemented. X11 cannot isolate the lock from hostile clients on
+the same display server.
 
-[Roadmap](https://github.com/nirucon/nirux/blob/main/ROADMAP.md) ·
-[Audit](https://github.com/nirucon/nirux/blob/main/AUDIT.md) ·
-[Tests](tests/x11.rs)
+## Development
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+sh tests/installer.sh
+```
 
 MIT. Copyright 2026 Nicklas Rudolfsson.
