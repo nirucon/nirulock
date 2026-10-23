@@ -26,7 +26,7 @@ pub struct Config {
     pub lock_timeout_minutes: u64,
 }
 
-/// The four built-in suite themes, for a component that does not carry the
+/// The built-in suite themes, for a component that does not carry the
 /// theme files itself. Only the text colours are used: the lock screen keeps an
 /// opaque black background so nothing behind it can show through.
 fn builtin_palette(name: &str) -> Option<palette::Palette> {
@@ -35,6 +35,8 @@ fn builtin_palette(name: &str) -> Option<palette::Palette> {
         "niru-nord" => (0xeceff4, 0x9aa5b1, 0x3b4252, 0x88c0d0),
         "niru-satie" => (0xdedad4, 0x8f8b86, 0x2a2724, 0xb08d7d),
         "niru-carl-larsson" => (0x3b3228, 0x7d6f5f, 0xd8cdbb, 0xa63d2f),
+        "niru-forest-vigil" => (0xd8ded2, 0x96a292, 0x2b362c, 0x8aa87e),
+        "niru-blood-of-urdr" => (0xe8d6cf, 0xb09a92, 0x3a1d1b, 0xc96050),
         _ => return None,
     };
     Some(palette::Palette {

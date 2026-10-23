@@ -1,4 +1,4 @@
-//! Niru Noir palette, shared field for field with NIRUWM and NIRUBAR.
+//! Default Niru Noir palette, shared field for field with NIRUWM and NIRUBAR.
 
 #[derive(Clone, Debug)]
 pub struct Palette {
