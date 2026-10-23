@@ -37,6 +37,8 @@ fn builtin_palette(name: &str) -> Option<palette::Palette> {
         "niru-carl-larsson" => (0x3b3228, 0x7d6f5f, 0xd8cdbb, 0xa63d2f),
         "niru-forest-vigil" => (0xd8ded2, 0x96a292, 0x2b362c, 0x8aa87e),
         "niru-blood-of-urdr" => (0xe8d6cf, 0xb09a92, 0x3a1d1b, 0xc96050),
+        "niru-root-and-stone" => (0xeadfd2, 0xb5a08c, 0x3a2a1e, 0xc19768),
+        "niru-blue-horizon" => (0xdce6eb, 0x93a6b2, 0x243846, 0x86aec8),
         _ => return None,
     };
     Some(palette::Palette {
