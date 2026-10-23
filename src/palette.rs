@@ -11,7 +11,7 @@ pub struct Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        // NIRUPI's Niru Noir: 0f0f10, e5e5e5, a8a8a8, 2a2a2d, 5a5a60
+        // Niru Noir: 0f0f10, e5e5e5, a8a8a8, 2a2a2d, 5a5a60
         Self {
             // Pure black. The idle and lock screens cover the whole display,
             // and a hint of colour read as "something is behind this".
