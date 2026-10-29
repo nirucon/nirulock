@@ -33,8 +33,21 @@ Super+Escape locks in NIRUWM. The lock shows a Caps Lock indicator when active;
 AltGr and Latin-1 case conversion are supported for password input.
 
 Settings live in `~/.config/niruui/lock.toml` (XDG respected). Optional
-`font_path`, `font_size` and `[palette]` overrides are shown in
-[config.example.toml](config.example.toml). Diagnostics are written to
+`font_path`, `rune_font_path`, `font_size` and `[palette]` overrides are shown in
+[config.example.toml](config.example.toml).
+
+### Layouts
+
+Choose one with `layout = "minimal" | "terminal" | "runic" | "corner"`:
+
+- `minimal` — the original centred clock, hostname, lock state, away time and prompt.
+- `terminal` — left-aligned monospace lock screen with a `hostname:~$ lock` line.
+- `runic` — the minimal composition with a discreet rune row when a runic font is
+  available. Runes are ornamental, never a second prompt or a hidden unlock path.
+- `corner` — clock top-left, hostname and away time at the bottom, prompt centred.
+
+The NIRUX theme controls colours; the layout only controls composition. The lock
+always stays opaque black. `nirulock --config` prints the selected layout. Diagnostics are written to
 `~/.local/state/nirulock/trace.log`; password characters, keycodes and modifiers
 are never logged.
 

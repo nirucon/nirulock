@@ -2,6 +2,13 @@
 # font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 font_size = 22.0
 
+# minimal | terminal | runic | corner
+layout = "minimal"
+
+# Optional: use a specific runic font. The runic layout omits its ornament if
+# no rune font is available; it never draws missing-glyph boxes.
+# rune_font_path = "/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf"
+
 [palette]
 background = "000000"
 foreground = "e5e5e5"

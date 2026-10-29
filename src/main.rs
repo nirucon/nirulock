@@ -104,6 +104,7 @@ struct Lock {
     surface: core::Surface,
     cfg: config::Config,
     renderer: core::TextRenderer,
+    rune_renderer: Option<core::TextRenderer>,
     state: State,
     input: String,
     started: Instant,
@@ -138,6 +139,9 @@ impl Lock {
         }
         let setup = surface.c.setup().clone();
         let renderer = core::TextRenderer::new(&font, cfg.font_size, &setup)?;
+        let rune_renderer = core::find_rune_font(cfg.rune_font_path.as_deref())
+            .map(|font| core::TextRenderer::new(&font, cfg.font_size * 2.0, &setup))
+            .transpose()?;
         let prompt_area = display::Area {
             x: 0,
             y: 0,
@@ -158,6 +162,7 @@ impl Lock {
             surface,
             cfg,
             renderer,
+            rune_renderer,
             state: State::Prompt,
             input: String::new(),
             started: Instant::now(),
@@ -440,89 +445,132 @@ impl Lock {
     fn draw(&mut self) -> Result<()> {
         let pal = self.cfg.palette.clone();
         self.surface.clear(pal.background)?;
-        let (centre, mid) = self.prompt_area.centre();
+        let area = self.prompt_area;
+        let (centre, mid) = area.centre();
         let line = self.renderer.line_height();
-
-        // Clock, then hostname, then the lock caption.
+        let hostname = core::hostname();
         let clock = core::clock_text(Local::now());
-        self.renderer.draw_centred(
-            &self.surface.c,
-            self.surface.gc,
-            self.surface.back,
-            self.surface.depth,
-            centre,
-            mid - line * 4,
-            &clock,
-            pal.foreground,
-            pal.background,
-        )?;
-        self.renderer.draw_centred(
-            &self.surface.c,
-            self.surface.gc,
-            self.surface.back,
-            self.surface.depth,
-            centre,
-            mid - line * 2,
-            &core::hostname(),
-            pal.muted,
-            pal.background,
-        )?;
-        self.renderer.draw_centred(
-            &self.surface.c,
-            self.surface.gc,
-            self.surface.back,
-            self.surface.depth,
-            centre,
-            mid,
-            "locked",
-            pal.focus,
-            pal.background,
-        )?;
-
         let away = self.started.elapsed().as_secs();
-        self.renderer.draw_centred(
-            &self.surface.c,
-            self.surface.gc,
-            self.surface.back,
-            self.surface.depth,
-            centre,
-            mid + line * 2,
-            &core::away_text(away),
-            pal.border.max(pal.focus),
-            pal.background,
-        )?;
-
-        // Password line: dots for typed characters, never the characters.
         let (label, colour) = match self.state {
             State::Prompt => ("password: ".to_string(), pal.foreground),
             State::Checking => ("checking...".to_string(), pal.muted),
             State::Wrong => (self.message.clone(), pal.focus),
         };
         let dots = "*".repeat(self.input.chars().count());
-        let text = format!("{label}{dots}");
-        self.renderer.draw_centred(
-            &self.surface.c,
-            self.surface.gc,
-            self.surface.back,
-            self.surface.depth,
-            centre,
-            mid + line * 4,
-            &text,
-            colour,
-            pal.background,
-        )?;
-        if self.caps {
-            self.renderer.draw_centred(
-                &self.surface.c,
-                self.surface.gc,
-                self.surface.back,
-                self.surface.depth,
+        let password = format!("{label}{dots}");
+        let width = i32::from(area.width);
+        let height = i32::from(area.height);
+        let left = |offset: i32| {
+            (i32::from(area.x) + offset).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+        };
+        let top = |offset: i32| {
+            (i32::from(area.y) + offset).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+        };
+        let right = |offset: i32| left(width - offset);
+        let draw = |renderer: &mut core::TextRenderer,
+                        surface: &mut core::Surface,
+                        baseline: i16,
+                        text: &str,
+                        fg: u32|
+         -> Result<()> {
+            renderer.draw_centred(
+                &surface.c,
+                surface.gc,
+                surface.back,
+                surface.depth,
                 centre,
-                mid + line * 6,
-                "Caps Lock",
-                pal.focus,
+                baseline,
+                text,
+                fg,
                 pal.background,
-            )?;
+            )
+        };
+        match self.cfg.layout {
+            config::Layout::Minimal => {
+                draw(&mut self.renderer, &mut self.surface, mid - line * 4, &clock, pal.foreground)?;
+                draw(&mut self.renderer, &mut self.surface, mid - line * 2, &hostname, pal.muted)?;
+                draw(&mut self.renderer, &mut self.surface, mid, "locked", pal.focus)?;
+                draw(&mut self.renderer, &mut self.surface, mid + line * 2, &core::away_text(away), pal.border.max(pal.focus))?;
+                draw(&mut self.renderer, &mut self.surface, mid + line * 4, &password, colour)?;
+                if self.caps {
+                    draw(&mut self.renderer, &mut self.surface, mid + line * 6, "Caps Lock", pal.focus)?;
+                }
+            }
+            config::Layout::Terminal => {
+                let x = left((width / 10).max(24));
+                let start = top((height / 3).max(i32::from(line) * 4));
+                let line_at = |index: i32| start.saturating_add(line.saturating_mul(index as i16));
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    x, line_at(0), &format!("{hostname}:~$ lock"), pal.muted, pal.background,
+                )?;
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    x, line_at(2), &clock, pal.foreground, pal.background,
+                )?;
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    x, line_at(3), &core::away_text(away), pal.border.max(pal.focus), pal.background,
+                )?;
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    x, line_at(5), "[ locked ]", pal.focus, pal.background,
+                )?;
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    x, line_at(7), &password, colour, pal.background,
+                )?;
+                if self.caps {
+                    self.renderer.draw_left(
+                        &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                        x, line_at(9), "Caps Lock", pal.focus, pal.background,
+                    )?;
+                }
+            }
+            config::Layout::Runic => {
+                if let Some(rune) = self.rune_renderer.as_mut() {
+                    rune.draw_centred(
+                        &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                        centre, mid - line * 6, "ᚠ  ᚢ  ᚦ  ᚨ  ᚱ  ᚲ  ᚷ  ᚹ",
+                        pal.border.max(pal.focus), pal.background,
+                    )?;
+                }
+                draw(&mut self.renderer, &mut self.surface, mid - line * 4, &clock, pal.foreground)?;
+                draw(&mut self.renderer, &mut self.surface, mid - line * 2, &hostname, pal.muted)?;
+                draw(&mut self.renderer, &mut self.surface, mid, "locked", pal.focus)?;
+                draw(&mut self.renderer, &mut self.surface, mid + line * 2, &core::away_text(away), pal.border.max(pal.focus))?;
+                draw(&mut self.renderer, &mut self.surface, mid + line * 4, &password, colour)?;
+                if self.caps {
+                    draw(&mut self.renderer, &mut self.surface, mid + line * 6, "Caps Lock", pal.focus)?;
+                }
+            }
+            config::Layout::Corner => {
+                let margin = (width / 10).max(16);
+                let left_x = left(margin);
+                let right_x = right(margin);
+                let top_y = top(margin + i32::from(line));
+                let bottom_y = top(height - margin - i32::from(line));
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    left_x, top_y, &clock, pal.foreground, pal.background,
+                )?;
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    left_x, bottom_y.saturating_sub(line * 2), &hostname, pal.muted, pal.background,
+                )?;
+                let away_text = core::away_text(away);
+                let away_width = self.renderer.width(&away_text);
+                self.renderer.draw_left(
+                    &self.surface.c, self.surface.gc, self.surface.back, self.surface.depth,
+                    right_x.saturating_sub(away_width), bottom_y, &away_text,
+                    pal.border.max(pal.focus), pal.background,
+                )?;
+                draw(&mut self.renderer, &mut self.surface, mid, "locked", pal.focus)?;
+                draw(&mut self.renderer, &mut self.surface, mid + line * 2, &password, colour)?;
+                if self.caps {
+                    draw(&mut self.renderer, &mut self.surface, mid + line * 4, "Caps Lock", pal.focus)?;
+                }
+            }
         }
         self.surface.present()?;
         Ok(())

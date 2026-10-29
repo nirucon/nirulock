@@ -9,6 +9,35 @@ use std::path::Path;
 
 pub const DEFAULT_PATH: &str = "lock.toml";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    Minimal,
+    Terminal,
+    Runic,
+    Corner,
+}
+
+impl Layout {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "minimal" => Some(Self::Minimal),
+            "terminal" => Some(Self::Terminal),
+            "runic" => Some(Self::Runic),
+            "corner" => Some(Self::Corner),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Terminal => "terminal",
+            Self::Runic => "runic",
+            Self::Corner => "corner",
+        }
+    }
+}
+
 /// The shared screensaver settings, the same file `niruwm/preferences.rs`
 /// reads for the idle ladder.
 ///
@@ -20,7 +49,9 @@ pub const LADDER_PATH: &str = "screensaver.toml";
 #[derive(Clone, Debug)]
 pub struct Config {
     pub font_path: Option<String>,
+    pub rune_font_path: Option<String>,
     pub font_size: f32,
+    pub layout: Layout,
     pub palette: palette::Palette,
     /// Deprecated compatibility input. Never used to dismiss a lock.
     pub lock_timeout_minutes: u64,
@@ -183,7 +214,9 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             font_path: None,
+            rune_font_path: None,
             font_size: 22.0,
+            layout: Layout::Minimal,
             palette: palette::Palette::default(),
             lock_timeout_minutes: 0,
         }
@@ -271,6 +304,13 @@ impl Config {
         if let Some(t) = v.get("font_path").and_then(|x| x.as_str()) {
             cfg.font_path = Some(t.to_string());
         }
+        if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
+            cfg.layout = Layout::parse(layout)
+                .ok_or_else(|| "layout must be minimal, terminal, runic or corner".to_string())?;
+        }
+        if let Some(t) = v.get("rune_font_path").and_then(|x| x.as_str()) {
+            cfg.rune_font_path = Some(t.to_string());
+        }
         if let Some(n) = v.get("font_size").and_then(|x| x.as_float()) {
             cfg.font_size = n as f32;
         }
@@ -318,10 +358,12 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
+            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
+            self.layout.as_str(),
+            self.rune_font_path.as_deref().unwrap_or("auto"),
             self.lock_timeout_minutes,
         )
     }
@@ -350,6 +392,15 @@ mod tests {
         let c = Config::from_value(&v).unwrap();
         assert_eq!(c.palette.background, 0x101010);
         assert_eq!(c.palette.foreground, 0xe5e5e5);
+    }
+
+    #[test]
+    fn layouts_parse_and_unknown_is_rejected() {
+        assert_eq!(Layout::parse("minimal"), Some(Layout::Minimal));
+        assert_eq!(Layout::parse("TERMINAL"), Some(Layout::Terminal));
+        assert_eq!(Layout::parse("runic"), Some(Layout::Runic));
+        assert_eq!(Layout::parse("corner"), Some(Layout::Corner));
+        assert!(Layout::parse("noir-ish").is_none());
     }
 
     #[test]

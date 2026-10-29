@@ -88,7 +88,23 @@ impl TextRenderer {
         bg: u32,
     ) -> crate::Result<()> {
         let width = self.width(text);
-        let mut pen = centre_x - width / 2;
+        self.draw_left(c, gc, target, depth, centre_x - width / 2, baseline, text, fg, bg)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_left(
+        &mut self,
+        c: &RustConnection,
+        gc: Gcontext,
+        target: Drawable,
+        depth: u8,
+        left_x: i16,
+        baseline: i16,
+        text: &str,
+        fg: u32,
+        bg: u32,
+    ) -> crate::Result<()> {
+        let mut pen = left_x;
         for ch in text.chars() {
             let mask = self.mask(ch);
             self.blend(c, gc, target, depth, &mask, pen, baseline, fg, bg)?;
@@ -455,6 +471,37 @@ pub fn find_font(explicit: Option<&str>) -> String {
         }
     }
     String::new()
+}
+
+/// Pick an optional runic font. The lock/saver never requires one: if it is
+/// missing, the runic layout simply omits the ornament rather than drawing
+/// missing-glyph boxes.
+pub fn find_rune_font(explicit: Option<&str>) -> Option<String> {
+    if let Some(path) = explicit {
+        if std::path::Path::new(path).is_file() {
+            return Some(path.to_string());
+        }
+    }
+    if let Ok(out) = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", "Noto Sans Runic:style=Regular"])
+        .output()
+    {
+        if out.status.success() {
+            let path = String::from_utf8_lossy(&out.stdout).to_string();
+            if std::path::Path::new(&path).is_file() {
+                return Some(path);
+            }
+        }
+    }
+    for candidate in [
+        "/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansRunic-Regular.ttf",
+    ] {
+        if std::path::Path::new(candidate).is_file() {
+            return Some(candidate.to_string());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
