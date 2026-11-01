@@ -49,8 +49,10 @@ Choose one with `layout = "minimal" | "terminal" | "runic" | "corner" | "cava"`:
 - `corner` — clock top-left, hostname and away time at the bottom, prompt centred.
 
 The `cava` layout samples system audio through [CAVA](https://github.com/karlstav/cava)
-at 30 frames per second with the same smoothing as NIRUAMP. Bars follow the
-active NIRUX theme's focus colour and lighter peak. Set `visualizer = false` to
+at 30 frames per second with the same smoothing as NIRUAMP. Between full lock
+frames only the spectrum rectangle is repainted, and CopyArea exposures are
+disabled, so a locked machine does not spin or heat up. Bars follow the active
+NIRUX theme's focus colour and lighter peak. Set `visualizer = false` to
 keep the cava composition without the spectrum. If CAVA is not installed, the
 lock still works and simply omits the bars; the password prompt never moves
 behind or captures the visualizer.

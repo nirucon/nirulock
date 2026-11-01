@@ -117,6 +117,7 @@ struct Lock {
     wrong_until: Option<Instant>,
     prompt_output: Option<u32>,
     prompt_area: display::Area,
+    spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
 }
@@ -183,6 +184,7 @@ impl Lock {
             wrong_until: None,
             prompt_output: None,
             prompt_area,
+            spectrum_rect: None,
             ready: false,
             caps,
         };
@@ -456,6 +458,7 @@ impl Lock {
     fn draw(&mut self) -> Result<()> {
         let pal = self.cfg.palette.clone();
         self.surface.clear(pal.background)?;
+        self.spectrum_rect = None;
         let spectrum = self.cava.as_mut().map(|cava| cava.values().to_vec());
         let area = self.prompt_area;
         let (centre, mid) = area.centre();
@@ -772,6 +775,7 @@ impl Lock {
                 )?;
                 if let Some(values) = spectrum.as_deref() {
                     cava::paint(&self.surface, &pal, spec_x, spec_y, spec_w, spec_h, values)?;
+                    self.spectrum_rect = Some((spec_x, spec_y, spec_w, spec_h));
                 }
                 let below = spec_y
                     .saturating_add(spec_h as i16)
@@ -809,6 +813,30 @@ impl Lock {
             }
         }
         self.surface.present()?;
+        Ok(())
+    }
+
+    /// Repaint only the CAVA panel between full frames. The clock, prompt and
+    /// lock state are static until an event or the next minute, so clearing and
+    /// uploading the whole screen at 30 fps would burn CPU for no visual gain.
+    fn draw_cava_frame(&mut self) -> Result<()> {
+        let Some((x, y, width, height)) = self.spectrum_rect else {
+            return Ok(());
+        };
+        let Some(cava) = self.cava.as_mut() else {
+            return Ok(());
+        };
+        let values = cava.values().to_vec();
+        cava::paint(
+            &self.surface,
+            &self.cfg.palette,
+            x,
+            y,
+            width,
+            height,
+            &values,
+        )?;
+        self.surface.present_rect(x, y, width, height)?;
         Ok(())
     }
 
@@ -1046,10 +1074,14 @@ impl Lock {
                 repaint = true;
             }
             let cava_active = self.cava.as_ref().is_some_and(cava::Cava::running);
-            if repaint || cava_active {
+            if repaint {
                 // Rendering/resource errors never dismiss an established lock.
                 if let Err(e) = self.draw() {
                     eprintln!("nirulock: repaint: {e}");
+                }
+            } else if cava_active {
+                if let Err(e) = self.draw_cava_frame() {
+                    eprintln!("nirulock: cava repaint: {e}");
                 }
             }
             self.surface.c.flush()?;
