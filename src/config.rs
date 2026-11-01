@@ -15,6 +15,7 @@ pub enum Layout {
     Terminal,
     Runic,
     Corner,
+    Cava,
 }
 
 impl Layout {
@@ -24,6 +25,7 @@ impl Layout {
             "terminal" => Some(Self::Terminal),
             "runic" => Some(Self::Runic),
             "corner" => Some(Self::Corner),
+            "cava" => Some(Self::Cava),
             _ => None,
         }
     }
@@ -34,6 +36,7 @@ impl Layout {
             Self::Terminal => "terminal",
             Self::Runic => "runic",
             Self::Corner => "corner",
+            Self::Cava => "cava",
         }
     }
 }
@@ -52,6 +55,8 @@ pub struct Config {
     pub rune_font_path: Option<String>,
     pub font_size: f32,
     pub layout: Layout,
+    /// Draw the CAVA spectrum in the `cava` layout.
+    pub visualizer: bool,
     pub palette: palette::Palette,
     /// Deprecated compatibility input. Never used to dismiss a lock.
     pub lock_timeout_minutes: u64,
@@ -216,7 +221,8 @@ impl Default for Config {
             font_path: None,
             rune_font_path: None,
             font_size: 22.0,
-            layout: Layout::Minimal,
+            layout: Layout::Cava,
+            visualizer: true,
             palette: palette::Palette::default(),
             lock_timeout_minutes: 0,
         }
@@ -305,8 +311,12 @@ impl Config {
             cfg.font_path = Some(t.to_string());
         }
         if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
-            cfg.layout = Layout::parse(layout)
-                .ok_or_else(|| "layout must be minimal, terminal, runic or corner".to_string())?;
+            cfg.layout = Layout::parse(layout).ok_or_else(|| {
+                "layout must be minimal, terminal, runic, corner or cava".to_string()
+            })?;
+        }
+        if let Some(enabled) = v.get("visualizer").and_then(|x| x.as_bool()) {
+            cfg.visualizer = enabled;
         }
         if let Some(t) = v.get("rune_font_path").and_then(|x| x.as_str()) {
             cfg.rune_font_path = Some(t.to_string());
@@ -358,11 +368,12 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
+            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nvisualizer: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
             self.layout.as_str(),
+            if self.visualizer { "on" } else { "off" },
             self.rune_font_path.as_deref().unwrap_or("auto"),
             self.lock_timeout_minutes,
         )
@@ -377,6 +388,15 @@ mod tests {
     fn defaults_are_sane() {
         let c = Config::default();
         assert_eq!(c.font_size, 22.0);
+        assert_eq!(c.layout, Layout::Cava);
+        assert!(c.visualizer);
+    }
+
+    #[test]
+    fn visualizer_can_be_turned_off() {
+        let v: toml::Value = "visualizer = false".parse().unwrap();
+        let c = Config::from_value(&v).unwrap();
+        assert!(!c.visualizer);
     }
 
     #[test]
@@ -400,6 +420,7 @@ mod tests {
         assert_eq!(Layout::parse("TERMINAL"), Some(Layout::Terminal));
         assert_eq!(Layout::parse("runic"), Some(Layout::Runic));
         assert_eq!(Layout::parse("corner"), Some(Layout::Corner));
+        assert_eq!(Layout::parse("CAVA"), Some(Layout::Cava));
         assert!(Layout::parse("noir-ish").is_none());
     }
 

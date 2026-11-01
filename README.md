@@ -2,8 +2,8 @@
 
 **Part of [NIRUX - A minimal X11 desktop by Nicklas Rudolfsson](https://github.com/nirucon/nirux).**
 
-**Early beta.** Native X11/PAM lock screen for the NIRU desktop, with clock, hostname and away
-time in the active theme.
+**Early beta.** Native X11/PAM lock screen for the NIRU desktop, with clock, hostname,
+away time and an optional CAVA spectrum in the active theme.
 
 
 ## Install
@@ -38,13 +38,22 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected). Optional
 
 ### Layouts
 
-Choose one with `layout = "minimal" | "terminal" | "runic" | "corner"`:
+Choose one with `layout = "minimal" | "terminal" | "runic" | "corner" | "cava"`:
 
+- `cava` — the default: large clock and hostname above a live CAVA spectrum, with
+  the lock state, away time and password prompt kept below the bars.
 - `minimal` — the original centred clock, hostname, lock state, away time and prompt.
 - `terminal` — left-aligned monospace lock screen with a `hostname:~$ lock` line.
 - `runic` — the minimal composition with a discreet rune row when a runic font is
   available. Runes are ornamental, never a second prompt or a hidden unlock path.
 - `corner` — clock top-left, hostname and away time at the bottom, prompt centred.
+
+The `cava` layout samples system audio through [CAVA](https://github.com/karlstav/cava)
+at 30 frames per second with the same smoothing as NIRUAMP. Bars follow the
+active NIRUX theme's focus colour and lighter peak. Set `visualizer = false` to
+keep the cava composition without the spectrum. If CAVA is not installed, the
+lock still works and simply omits the bars; the password prompt never moves
+behind or captures the visualizer.
 
 The NIRUX theme controls colours; the layout only controls composition. The lock
 always stays opaque black. `nirulock --config` prints the selected layout. Diagnostics are written to

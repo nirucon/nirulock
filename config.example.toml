@@ -2,8 +2,10 @@
 # font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 font_size = 22.0
 
-# minimal | terminal | runic | corner
-layout = "minimal"
+# minimal | terminal | runic | corner | cava
+# cava uses the active NIRUX theme and visualises system audio through CAVA.
+layout = "cava"
+visualizer = true
 
 # Optional: use a specific runic font. The runic layout omits its ornament if
 # no rune font is available; it never draws missing-glyph boxes.
