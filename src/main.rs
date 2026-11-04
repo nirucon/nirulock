@@ -189,17 +189,14 @@ impl Lock {
             caps,
         };
         lock.trace("starting");
-        // Grab the pointer first, then ask the window manager to let go of its
-        // key grabs, then take the keyboard. The order is the fix: a keyboard
-        // grab does not displace key grabs another client already holds, so
-        // taking the keyboard first meant the window manager's grabs stayed
-        // on top until each of its keys was pressed -- which is why Super had
-        // to be held to type a password.
-        lock.grab_pointer()?;
-        // Notify before acquiring input. The X server round trip does not prove
-        // that the WM processed the message; verified active grabs are required.
+        // Ask the WM and suite overlays to yield their active grabs before the
+        // lock takes over. The WM can release its own drag/keyboard grabs; the
+        // launcher must close itself because its input grab belongs to another
+        // X client and cannot be released by the locker.
         lock.tell_wm_locked(true)?;
         lock.wm_notified = true;
+        lock.release_overlays()?;
+        lock.grab_pointer()?;
         // Above everything from the first frame: the bar and any
         // override-redirect window are already on screen when a lock starts.
         lock.grab_input()?;
@@ -371,27 +368,68 @@ impl Lock {
         Ok(())
     }
 
+    /// Ask suite overlays that own input grabs to close before locking.
+    ///
+    /// NIRULOCK cannot ungrab another client's active pointer grab. The launcher
+    /// owns one while open, so it receives a bounded close request and the
+    /// selection owner is watched until the overlay is gone.
+    fn release_overlays(&self) -> Result<()> {
+        let c = &self.surface.c;
+        let selection = c
+            .intern_atom(false, b"_NIRULANCHER_SELECTION")?
+            .reply()?
+            .atom;
+        let request = c.intern_atom(false, b"_NIRULANCHER_LOCK")?.reply()?.atom;
+        let owner = c.get_selection_owner(selection)?.reply()?.owner;
+        if owner == x11rb::NONE {
+            return Ok(());
+        }
+        self.trace(&format!("requesting launcher {owner:#x} to yield input"));
+        c.send_event(
+            false,
+            owner,
+            EventMask::NO_EVENT,
+            x11rb::protocol::xproto::ClientMessageEvent::new(32, owner, request, [1, 0, 0, 0, 0]),
+        )?;
+        c.flush()?;
+        let deadline = Instant::now() + Duration::from_millis(800);
+        while Instant::now() < deadline {
+            if c.get_selection_owner(selection)?.reply()?.owner == x11rb::NONE {
+                self.trace("launcher released its input grab");
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Err("the launcher did not release its input grab; lock was not established".into())
+    }
+
     fn grab_pointer(&self) -> Result<()> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
-        let reply = self
-            .surface
-            .c
-            .grab_pointer(
-                true,
-                root,
-                EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
-                GrabMode::ASYNC,
-                GrabMode::ASYNC,
-                x11rb::NONE,
-                x11rb::NONE,
-                x11rb::CURRENT_TIME,
-            )?
-            .reply()?;
-        if reply.status != GrabStatus::SUCCESS {
-            return Err(format!("cannot grab pointer: {:?}", reply.status).into());
+        let deadline = Instant::now() + Duration::from_millis(800);
+        loop {
+            let reply = self
+                .surface
+                .c
+                .grab_pointer(
+                    true,
+                    root,
+                    EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                    x11rb::NONE,
+                    x11rb::NONE,
+                    x11rb::CURRENT_TIME,
+                )?
+                .reply()?;
+            if reply.status == GrabStatus::SUCCESS {
+                self.surface.c.flush()?;
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("cannot grab pointer: {:?}", reply.status).into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
-        self.surface.c.flush()?;
-        Ok(())
     }
 
     /// Acquire a verified active keyboard grab after notifying the WM.
