@@ -1198,7 +1198,10 @@ impl Lock {
             }
             let m = Local::now().format("%Y-%m-%d %H:%M").to_string();
             let away = self.started.elapsed().as_secs() / 60;
-            if m != minute || away != away_minute {
+            // Nobody sees the clock with the display off; it is redrawn when
+            // the display comes back on.
+            let display_on = self.power.as_ref().map_or(true, cava::DisplayPower::on);
+            if display_on && (m != minute || away != away_minute) {
                 minute = m;
                 away_minute = away;
                 repaint = true;
