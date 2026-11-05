@@ -8,7 +8,7 @@ description = "Niru Noir lock screen for X11"
 repository = "https://github.com/nirucon/nirulock"
 
 [dependencies]
-x11rb = { version = "0.13", features = ["screensaver", "randr", "xkb"] }
+x11rb = { version = "0.13", features = ["screensaver", "randr", "xkb", "dpms"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 indexmap = "=2.7.1"

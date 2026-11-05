@@ -109,6 +109,8 @@ struct Lock {
     clock_renderer: core::TextRenderer,
     rune_renderer: Option<core::TextRenderer>,
     cava: Option<cava::Cava>,
+    /// Display power, followed only while a spectrum is shown.
+    power: Option<cava::DisplayPower>,
     state: State,
     input: String,
     started: Instant,
@@ -151,6 +153,7 @@ impl Lock {
         } else {
             None
         };
+        let power = cava.as_ref().map(|_| cava::DisplayPower::new(&surface.c));
         let rune_renderer = core::find_rune_font(cfg.rune_font_path.as_deref())
             .map(|font| core::TextRenderer::new(&font, cfg.font_size * 2.0, &setup))
             .transpose()?;
@@ -178,6 +181,7 @@ impl Lock {
             clock_renderer,
             rune_renderer,
             cava,
+            power,
             state: State::Prompt,
             input: String::new(),
             started: Instant::now(),
@@ -194,6 +198,13 @@ impl Lock {
         };
         lock.trace("starting");
         lock.trace(&format!("keyboard: {}", lock.keyboard.backend()));
+        if let Some(power) = lock.power.as_ref() {
+            lock.trace(&format!("display power: {}", power.mode()));
+            let on = power.on();
+            if let Some(cava) = lock.cava.as_mut() {
+                cava.set_display(on);
+            }
+        }
         // Ask the WM and suite overlays to yield their active grabs before the
         // lock takes over. The WM can release its own drag/keyboard grabs; the
         // launcher must close itself because its input grab belongs to another
@@ -1016,6 +1027,18 @@ impl Lock {
                     if self.keyboard.handle_event(event) {
                         continue;
                     }
+                    if let Some(power) = self.power.as_mut() {
+                        let changed = match event {
+                            Event::KeyPress(_) | Event::ButtonPress(_) | Event::MotionNotify(_) => {
+                                power.input(&self.surface.c, Instant::now())
+                            }
+                            event => power.event(event),
+                        };
+                        if let Some(on) = changed {
+                            self.display_power(on);
+                            repaint = true;
+                        }
+                    }
                 }
                 match event {
                     Ok(Some(Event::KeyPress(e))) => {
@@ -1066,7 +1089,15 @@ impl Lock {
                 self.state = State::Prompt;
                 repaint = true;
             }
-            let cava_active = self.cava.as_ref().is_some_and(cava::Cava::running);
+            if let Some(on) = self
+                .power
+                .as_mut()
+                .and_then(|power| power.poll(&self.surface.c, Instant::now()))
+            {
+                self.display_power(on);
+                repaint = true;
+            }
+            let cava_active = self.cava.as_ref().is_some_and(cava::Cava::animating);
             if repaint {
                 // Rendering/resource errors never dismiss an established lock.
                 if let Err(e) = self.draw() {
@@ -1086,47 +1117,72 @@ impl Lock {
             if pending.is_some() {
                 continue;
             }
-            let timeout = if cava_active {
-                33
-            } else {
-                self.wrong_until
-                    .map(|until| {
-                        until
-                            .saturating_duration_since(Instant::now())
-                            .as_millis()
-                            .clamp(1, 1000) as i32
-                    })
-                    .unwrap_or(1000)
-            };
-            wait_readable(
-                self.surface.c.stream().as_raw_fd(),
-                self.authentication
-                    .as_ref()
-                    .map(|auth| auth.wake.as_raw_fd()),
+            let timeout = if cava_active { 33 } else { self.idle_timeout() };
+            let cava_wake = self.cava.as_ref().and_then(cava::Cava::wake_fd);
+            let ready = wait_readable(
+                [
+                    Some(self.surface.c.stream().as_raw_fd()),
+                    self.authentication
+                        .as_ref()
+                        .map(|auth| auth.wake.as_raw_fd()),
+                    cava_wake,
+                ],
                 timeout,
             );
+            if ready[2] {
+                if let Some(cava) = self.cava.as_mut() {
+                    cava.woke();
+                }
+            }
         }
+    }
+
+    /// Follow a display power change: stop or restart the spectrum.
+    fn display_power(&mut self, on: bool) {
+        if let Some(cava) = self.cava.as_mut() {
+            cava.set_display(on);
+        }
+        self.trace(if on { "display on" } else { "display off" });
+    }
+
+    /// Without animation the loop only has to wake for the next clock or
+    /// away-time minute, the end of failure feedback and a due DPMS poll.
+    fn idle_timeout(&self) -> i32 {
+        use chrono::Timelike;
+        let now = Local::now();
+        let into_minute = u64::from(now.second()) * 1000 + u64::from(now.timestamp_subsec_millis());
+        let mut ms = 60_000u64.saturating_sub(into_minute.min(59_999));
+        let away = (self.started.elapsed().as_millis() % 60_000) as u64;
+        ms = ms.min(60_000 - away);
+        let instant = Instant::now();
+        for deadline in [
+            self.wrong_until,
+            self.power.as_ref().and_then(cava::DisplayPower::deadline),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            ms = ms.min(deadline.saturating_duration_since(instant).as_millis() as u64);
+        }
+        // A few milliseconds late is better than waking just before a boundary.
+        (ms + 5).clamp(1, 60_000) as i32
     }
 }
 
-/// Wait on X and the bounded authentication worker without periodic auth polling.
-fn wait_readable(fd: std::os::fd::RawFd, auth_fd: Option<std::os::fd::RawFd>, timeout_ms: i32) {
-    let mut fds = [
-        libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        },
-        libc::pollfd {
-            fd: auth_fd.unwrap_or(-1),
-            events: libc::POLLIN,
-            revents: 0,
-        },
-    ];
-    // SAFETY: two valid pollfd values; poll ignores a negative unused fd.
-    unsafe {
-        libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms);
+/// Wait on X, the bounded authentication worker and the CAVA silence wake-up
+/// without periodic polling. Returns which descriptors became readable.
+fn wait_readable(fds: [Option<std::os::fd::RawFd>; 3], timeout_ms: i32) -> [bool; 3] {
+    let mut poll = fds.map(|fd| libc::pollfd {
+        fd: fd.unwrap_or(-1),
+        events: libc::POLLIN,
+        revents: 0,
+    });
+    // SAFETY: three valid pollfd values; poll ignores a negative unused fd.
+    let n = unsafe { libc::poll(poll.as_mut_ptr(), poll.len() as libc::nfds_t, timeout_ms) };
+    if n <= 0 {
+        return [false; 3];
     }
+    poll.map(|p| p.fd >= 0 && p.revents & libc::POLLIN != 0)
 }
 
 fn main() {

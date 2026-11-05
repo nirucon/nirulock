@@ -4,11 +4,25 @@
 //! 8-bit mono bars on stdout. The rendering is done here, in the same 24/32-bit
 //! pixel format as the text renderer, so the bars follow the active NIRUX theme
 //! without requiring a compositor or a second window.
+//!
+//! Power: the spectrum pauses whenever it cannot be seen or has nothing to
+//! show. With the display off (DPMS not `On`) the CAVA child is stopped and
+//! reaped and one static frame is drawn; it restarts as soon as the display
+//! is on again. While the display is on but every bar has been silent for
+//! two seconds, the 30 fps repaint stops after one flat frame, and the reader
+//! thread wakes the caller on the first non-silent sample. CAVA's own
+//! `sleep_timer` stops its FFT during the same silence. The DPMS watch and
+//! the [`PowerGate`] state machine below are self-contained so that
+//! NIRUSCREENSAVER can copy this file verbatim.
 
 use crate::{core::Surface, palette::Palette};
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::net::UnixStream,
+    },
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
@@ -19,8 +33,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use x11rb::{
-    connection::Connection,
-    protocol::xproto::{ConnectionExt, ImageFormat, ImageOrder},
+    connection::{Connection, RequestConnection},
+    protocol::{
+        dpms::{self, ConnectionExt as _},
+        xproto::{ConnectionExt, ImageFormat, ImageOrder},
+        Event,
+    },
 };
 
 pub const BARS: usize = 48;
@@ -29,6 +47,7 @@ const CAVA_CONFIG: &str = "\
 [general]\n\
 bars = 48\n\
 framerate = 30\n\
+sleep_timer = 2\n\
 \n\
 [output]\n\
 method = raw\n\
@@ -45,12 +64,15 @@ struct Visualizer {
     child: Child,
     bars: Arc<Mutex<Vec<u8>>>,
     stop: Arc<AtomicBool>,
+    /// Set while the caller has stopped repainting for silence; the reader
+    /// then signals `wake` on the first non-silent frame.
+    quiet: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
     path: PathBuf,
 }
 
 impl Visualizer {
-    fn start() -> Option<Self> {
+    fn start(wake: Option<UnixStream>) -> Option<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -83,8 +105,11 @@ impl Visualizer {
         };
         let bars = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let quiet = Arc::new(AtomicBool::new(false));
         let thread_bars = Arc::clone(&bars);
         let thread_stop = Arc::clone(&stop);
+        let thread_quiet = Arc::clone(&quiet);
+        let mut wake = wake;
         let reader = thread::Builder::new()
             .name("niru-cava-reader".into())
             .spawn(move || {
@@ -100,6 +125,11 @@ impl Visualizer {
                         guard.clear();
                         guard.extend_from_slice(&frame);
                     }
+                    if !silent_frame(&frame) && thread_quiet.swap(false, Ordering::AcqRel) {
+                        if let Some(wake) = wake.as_mut() {
+                            let _ = wake.write(&[1]);
+                        }
+                    }
                 }
             })
             .ok();
@@ -113,6 +143,7 @@ impl Visualizer {
             child,
             bars,
             stop,
+            quiet,
             reader,
             path,
         })
@@ -150,36 +181,109 @@ pub struct Cava {
     last: Instant,
     next_retry: Instant,
     primed: bool,
+    gate: PowerGate,
+    /// Read end of the reader's silence wake-up; the write end is cloned
+    /// into each reader thread.
+    wake: Option<(UnixStream, UnixStream)>,
 }
 
 impl Cava {
     pub fn new() -> Self {
         let now = Instant::now();
-        let visualizer = Visualizer::start();
+        let wake = UnixStream::pair().ok().and_then(|(read, write)| {
+            read.set_nonblocking(true).ok()?;
+            write.set_nonblocking(true).ok()?;
+            Some((read, write))
+        });
+        let visualizer = Visualizer::start(Self::writer(&wake));
         Self {
             visualizer,
             shown: vec![0.0; BARS],
             last: now,
             next_retry: now + Duration::from_secs(2),
             primed: false,
+            gate: PowerGate::new(),
+            wake,
         }
     }
 
-    /// True while a CAVA child is believed to be running. Used to choose the
-    /// 30 fps idle refresh instead of the once-a-minute clock refresh.
-    pub fn running(&self) -> bool {
-        self.visualizer.is_some()
+    fn writer(wake: &Option<(UnixStream, UnixStream)>) -> Option<UnixStream> {
+        wake.as_ref().and_then(|(_, write)| write.try_clone().ok())
     }
 
-    /// Latest smoothed bar heights in the range 0.0..=1.0.
+    /// True while the spectrum should be repainted at 30 fps: a CAVA child
+    /// is believed to be running, the display is on and there is sound.
+    pub fn animating(&self) -> bool {
+        self.visualizer.is_some() && self.gate.activity() == Activity::Live
+    }
+
+    /// The descriptor to wait on while silent: readable on the first
+    /// non-silent sample.
+    pub fn wake_fd(&self) -> Option<RawFd> {
+        if self.gate.activity() != Activity::Silent {
+            return None;
+        }
+        self.wake.as_ref().map(|(read, _)| read.as_raw_fd())
+    }
+
+    /// Consume a wake-up from the reader and resume the 30 fps repaint.
+    pub fn woke(&mut self) {
+        if let Some((read, _)) = self.wake.as_mut() {
+            let mut buf = [0u8; 16];
+            while matches!(read.read(&mut buf), Ok(n) if n > 0) {}
+        }
+        self.gate.sample(false, Instant::now());
+    }
+
+    /// Follow the display power state. Off stops and reaps the CAVA child;
+    /// on starts it again immediately.
+    pub fn set_display(&mut self, on: bool) {
+        if !self.gate.display(on) {
+            return;
+        }
+        if on {
+            self.primed = false;
+            self.last = Instant::now();
+            if self.visualizer.is_none() {
+                self.visualizer = Visualizer::start(Self::writer(&self.wake));
+                self.next_retry = Instant::now() + Duration::from_secs(2);
+            }
+        } else {
+            // Drop kills and reaps the child and joins the reader.
+            self.visualizer = None;
+        }
+        self.shown.iter_mut().for_each(|v| *v = 0.0);
+    }
+
+    /// Latest smoothed bar heights in the range 0.0..=1.0. Flat while paused.
     pub fn values(&mut self) -> &[f32] {
         let now = Instant::now();
+        if self.gate.activity() == Activity::DisplayOff {
+            self.shown.iter_mut().for_each(|v| *v = 0.0);
+            return &self.shown;
+        }
         self.maintain(now);
         let raw = self
             .visualizer
             .as_ref()
             .map(Visualizer::bars)
             .unwrap_or_default();
+        if self.gate.sample(silent_frame(&raw), now) && self.gate.activity() == Activity::Silent {
+            if let Some(visualizer) = self.visualizer.as_ref() {
+                visualizer.quiet.store(true, Ordering::Release);
+                // A sample that arrived between the read above and the flag
+                // would otherwise be missed until the next one.
+                if !silent_frame(&visualizer.bars()) {
+                    self.gate.sample(false, now);
+                    visualizer.quiet.store(false, Ordering::Release);
+                }
+            }
+        }
+        if self.gate.activity() == Activity::Silent {
+            self.primed = false;
+            self.shown.iter_mut().for_each(|v| *v = 0.0);
+            return &self.shown;
+        }
         let dt = now
             .saturating_duration_since(self.last)
             .as_secs_f32()
@@ -221,9 +325,200 @@ impl Cava {
             }
         }
         if self.visualizer.is_none() && now >= self.next_retry {
-            self.visualizer = Visualizer::start();
+            self.visualizer = Visualizer::start(Self::writer(&self.wake));
             self.next_retry = now + Duration::from_secs(2);
         }
+    }
+}
+
+/// A frame with every bar at (or within one step of) zero.
+fn silent_frame(frame: &[u8]) -> bool {
+    frame.iter().all(|value| *value <= 1)
+}
+
+/// How long every bar must stay silent before the repaint stops.
+pub const SILENCE_AFTER: Duration = Duration::from_secs(2);
+/// The DPMS state is polled at most this often when the server cannot send
+/// DPMS events.
+pub const DPMS_POLL: Duration = Duration::from_secs(2);
+
+/// What the spectrum is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activity {
+    /// Sound and a lit display: repaint at 30 fps.
+    Live,
+    /// The display is on but there has been no sound for [`SILENCE_AFTER`]:
+    /// one flat frame, then no repaints until a non-silent sample.
+    Silent,
+    /// DPMS is not `On`: CAVA is stopped and one static frame is shown.
+    DisplayOff,
+}
+
+/// The pause state machine, free of I/O so that it can be tested.
+#[derive(Debug)]
+pub struct PowerGate {
+    display_on: bool,
+    silent: bool,
+    silent_since: Option<Instant>,
+}
+
+impl Default for PowerGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PowerGate {
+    pub fn new() -> Self {
+        Self {
+            display_on: true,
+            silent: false,
+            silent_since: None,
+        }
+    }
+
+    pub fn activity(&self) -> Activity {
+        if !self.display_on {
+            Activity::DisplayOff
+        } else if self.silent {
+            Activity::Silent
+        } else {
+            Activity::Live
+        }
+    }
+
+    /// Record the display power state. Returns true when it changed. Turning
+    /// the display on starts a fresh silence window.
+    pub fn display(&mut self, on: bool) -> bool {
+        if on == self.display_on {
+            return false;
+        }
+        self.display_on = on;
+        self.silent = false;
+        self.silent_since = None;
+        true
+    }
+
+    /// Record whether the latest sample was silent. Returns true when the
+    /// activity changed between `Live` and `Silent`.
+    pub fn sample(&mut self, silent: bool, now: Instant) -> bool {
+        if !self.display_on {
+            return false;
+        }
+        if !silent {
+            self.silent_since = None;
+            return std::mem::replace(&mut self.silent, false);
+        }
+        let since = *self.silent_since.get_or_insert(now);
+        if !self.silent && now.saturating_duration_since(since) >= SILENCE_AFTER {
+            self.silent = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Watches the display power (DPMS) state.
+///
+/// DPMS 1.2 servers send `DPMSInfoNotify`; older servers are polled with
+/// `DPMSInfo`, at most every [`DPMS_POLL`] and immediately on input (input is
+/// what wakes a display). A server without DPMS counts as always on.
+pub struct DisplayPower {
+    available: bool,
+    events: bool,
+    on: bool,
+    next_poll: Instant,
+    last_input_check: Option<Instant>,
+}
+
+impl DisplayPower {
+    pub fn new<C: RequestConnection>(c: &C) -> Self {
+        let version = c
+            .dpms_get_version(1, 2)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok());
+        let available = version.is_some();
+        let events = version
+            .as_ref()
+            .is_some_and(|v| (v.server_major_version, v.server_minor_version) >= (1, 2))
+            && c.dpms_select_input(dpms::EventMask::INFO_NOTIFY)
+                .ok()
+                .and_then(|cookie| cookie.check().ok())
+                .is_some();
+        let mut power = Self {
+            available,
+            events,
+            on: true,
+            next_poll: Instant::now() + DPMS_POLL,
+            last_input_check: None,
+        };
+        if available {
+            power.on = Self::query(c).unwrap_or(true);
+        }
+        power
+    }
+
+    /// How the state is followed; for the diagnostic log.
+    pub fn mode(&self) -> &'static str {
+        match (self.available, self.events) {
+            (false, _) => "no DPMS",
+            (true, true) => "DPMS events",
+            (true, false) => "DPMS polling",
+        }
+    }
+
+    pub fn on(&self) -> bool {
+        self.on
+    }
+
+    fn query<C: RequestConnection>(c: &C) -> Option<bool> {
+        let info = c.dpms_info().ok()?.reply().ok()?;
+        Some(!info.state || info.power_level == dpms::DPMSMode::ON)
+    }
+
+    fn set(&mut self, on: Option<bool>) -> Option<bool> {
+        let on = on?;
+        (on != std::mem::replace(&mut self.on, on)).then_some(on)
+    }
+
+    /// A DPMS event; returns the new state when it changed.
+    pub fn event(&mut self, event: &Event) -> Option<bool> {
+        match event {
+            Event::DpmsInfoNotify(e) => {
+                self.set(Some(!e.state || e.power_level == dpms::DPMSMode::ON))
+            }
+            _ => None,
+        }
+    }
+
+    /// Poll when due (servers without events); returns a changed state.
+    pub fn poll<C: RequestConnection>(&mut self, c: &C, now: Instant) -> Option<bool> {
+        if !self.available || self.events || now < self.next_poll {
+            return None;
+        }
+        self.next_poll = now + DPMS_POLL;
+        self.set(Self::query(c))
+    }
+
+    /// Input arrived. While the display is off, check at once (at most every
+    /// 250 ms), so the spectrum is back within a second of waking.
+    pub fn input<C: RequestConnection>(&mut self, c: &C, now: Instant) -> Option<bool> {
+        if !self.available || self.on {
+            return None;
+        }
+        if self
+            .last_input_check
+            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_millis(250))
+        {
+            return None;
+        }
+        self.last_input_check = Some(now);
+        self.set(Self::query(c))
+    }
+
+    /// When the next poll is due, for the event loop's timeout.
+    pub fn deadline(&self) -> Option<Instant> {
+        (self.available && !self.events).then_some(self.next_poll)
     }
 }
 
@@ -353,4 +648,61 @@ pub fn paint(
         &bytes,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silence_pauses_after_the_window_and_sound_resumes() {
+        let start = Instant::now();
+        let mut gate = PowerGate::new();
+        assert_eq!(gate.activity(), Activity::Live);
+        assert!(!gate.sample(true, start));
+        assert!(!gate.sample(true, start + Duration::from_millis(1900)));
+        assert_eq!(gate.activity(), Activity::Live);
+        assert!(gate.sample(true, start + SILENCE_AFTER));
+        assert_eq!(gate.activity(), Activity::Silent);
+        assert!(gate.sample(false, start + Duration::from_secs(5)));
+        assert_eq!(gate.activity(), Activity::Live);
+    }
+
+    #[test]
+    fn a_single_sound_sample_restarts_the_silence_window() {
+        let start = Instant::now();
+        let mut gate = PowerGate::new();
+        gate.sample(true, start);
+        gate.sample(false, start + Duration::from_millis(1500));
+        assert!(!gate.sample(true, start + Duration::from_millis(2500)));
+        assert_eq!(gate.activity(), Activity::Live);
+        assert!(gate.sample(true, start + Duration::from_millis(4500)));
+    }
+
+    #[test]
+    fn display_off_wins_and_on_starts_fresh() {
+        let start = Instant::now();
+        let mut gate = PowerGate::new();
+        gate.sample(true, start);
+        gate.sample(true, start + SILENCE_AFTER);
+        assert_eq!(gate.activity(), Activity::Silent);
+        assert!(gate.display(false));
+        assert!(!gate.display(false));
+        assert_eq!(gate.activity(), Activity::DisplayOff);
+        // Samples while off change nothing.
+        assert!(!gate.sample(false, start + Duration::from_secs(3)));
+        assert_eq!(gate.activity(), Activity::DisplayOff);
+        assert!(gate.display(true));
+        assert_eq!(gate.activity(), Activity::Live);
+    }
+
+    #[test]
+    fn silent_frames_allow_one_step_of_noise() {
+        assert!(silent_frame(&[0; BARS]));
+        assert!(silent_frame(&[1; BARS]));
+        assert!(silent_frame(&[]));
+        let mut frame = [0u8; BARS];
+        frame[7] = 9;
+        assert!(!silent_frame(&frame));
+    }
 }
