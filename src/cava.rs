@@ -21,7 +21,7 @@ use std::{
     io::{Read, Write},
     os::{
         fd::{AsRawFd, RawFd},
-        unix::net::UnixStream,
+        unix::{net::UnixStream, process::CommandExt},
     },
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -84,13 +84,23 @@ impl Visualizer {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::write(&path, CAVA_CONFIG).ok()?;
-        let mut child = match Command::new("cava")
+        let mut command = Command::new("cava");
+        command
             .arg("-p")
             .arg(&path)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+            .stderr(Stdio::null());
+        // Stop CAVA if this process dies without dropping the visualizer
+        // (killed, or `process::exit`). With `sleep_timer` a silent CAVA no
+        // longer writes, so it would not die of SIGPIPE and could linger.
+        // SAFETY: prctl is async-signal-safe and touches no Rust state.
+        unsafe {
+            command.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM, 0, 0, 0);
+                Ok(())
+            });
+        }
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(_) => {
                 let _ = fs::remove_file(&path);

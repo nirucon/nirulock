@@ -1049,6 +1049,9 @@ impl Lock {
                 self.surface.c.flush()?;
                 self.touch_idle_clock();
                 self.trace("password accepted, idle clock told");
+                // process::exit skips destructors: stop CAVA and remove its
+                // temporary config explicitly.
+                self.cava = None;
                 std::process::exit(0);
             }
             // The entry is not cleared: it was taken at submit, and anything
@@ -1312,6 +1315,7 @@ fn main() {
                 if let Err(e) = lock.run() {
                     let _ = lock.tell_wm_locked(false);
                     eprintln!("nirulock: {e}");
+                    drop(lock);
                     std::process::exit(1)
                 }
             }
