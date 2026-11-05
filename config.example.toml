@@ -7,6 +7,11 @@ font_size = 22.0
 layout = "cava"
 visualizer = true
 
+# How the prompt echoes the password: "count" shows one * per character (the
+# default); "pulse" shows a fixed row of eight cells with one lit * that moves
+# to a random cell on every key, so the length is never shown.
+prompt_echo = "count"
+
 # Optional: use a specific runic font. The runic layout omits its ornament if
 # no rune font is available; it never draws missing-glyph boxes.
 # rune_font_path = "/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf"
@@ -17,3 +22,5 @@ foreground = "e5e5e5"
 muted = "a8a8a8"
 border = "2a2a2d"
 focus = "5a5a60"
+# Failure feedback; defaults to the appearance contract's warning colour.
+# warning = "d7b36a"

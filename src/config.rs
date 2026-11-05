@@ -41,6 +41,33 @@ impl Layout {
     }
 }
 
+/// How the prompt echoes the password entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Echo {
+    /// One `*` per character (the default and the earlier behaviour).
+    Count,
+    /// A fixed-width indicator that moves on every key and never shows the
+    /// length.
+    Pulse,
+}
+
+impl Echo {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "count" => Some(Self::Count),
+            "pulse" => Some(Self::Pulse),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Pulse => "pulse",
+        }
+    }
+}
+
 /// The shared screensaver settings, the same file `niruwm/preferences.rs`
 /// reads for the idle ladder.
 ///
@@ -64,6 +91,7 @@ pub struct Config {
     /// with NIRUSCREENSAVER: the appearance contract's `warning`, or
     /// `[palette] warning` in lock.toml.
     pub warning: u32,
+    pub prompt_echo: Echo,
     /// Deprecated compatibility input. Never used to dismiss a lock.
     pub lock_timeout_minutes: u64,
 }
@@ -231,6 +259,7 @@ impl Default for Config {
             visualizer: true,
             palette: palette::Palette::default(),
             warning: DEFAULT_WARNING,
+            prompt_echo: Echo::Count,
             lock_timeout_minutes: 0,
         }
     }
@@ -322,6 +351,10 @@ impl Config {
                 "layout must be minimal, terminal, runic, corner or cava".to_string()
             })?;
         }
+        if let Some(echo) = v.get("prompt_echo").and_then(|x| x.as_str()) {
+            cfg.prompt_echo = Echo::parse(echo)
+                .ok_or_else(|| "prompt_echo must be count or pulse".to_string())?;
+        }
         if let Some(enabled) = v.get("visualizer").and_then(|x| x.as_bool()) {
             cfg.visualizer = enabled;
         }
@@ -388,11 +421,12 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nvisualizer: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
+            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
             self.layout.as_str(),
+            self.prompt_echo.as_str(),
             if self.visualizer { "on" } else { "off" },
             self.rune_font_path.as_deref().unwrap_or("auto"),
             self.lock_timeout_minutes,
@@ -432,6 +466,15 @@ mod tests {
         assert_eq!(c.warning, DEFAULT_WARNING);
         let v: toml::Value = "[palette]\nwarning = \"ff0000\"".parse().unwrap();
         assert_eq!(Config::from_value(&v).unwrap().warning, 0xff0000);
+    }
+
+    #[test]
+    fn prompt_echo_defaults_to_count_and_accepts_pulse() {
+        assert_eq!(Config::default().prompt_echo, Echo::Count);
+        let v: toml::Value = "prompt_echo = \"pulse\"".parse().unwrap();
+        assert_eq!(Config::from_value(&v).unwrap().prompt_echo, Echo::Pulse);
+        let v: toml::Value = "prompt_echo = \"stars\"".parse().unwrap();
+        assert!(Config::from_value(&v).is_err());
     }
 
     #[test]

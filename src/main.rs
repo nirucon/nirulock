@@ -79,6 +79,49 @@ fn failed_text(n: u32) -> String {
     }
 }
 
+/// Width of the `pulse` echo.
+const PULSE_CELLS: usize = 8;
+
+/// The entry as shown on the prompt line.
+///
+/// `count` shows one `*` per character. `pulse` shows a fixed row of eight
+/// cells with one lit `*` that moves to a different cell on every key, so
+/// neither the width nor the position reveals the length; only an empty
+/// entry is distinguishable (no row at all).
+fn echo(mode: config::Echo, chars: usize, pulse: usize) -> String {
+    match mode {
+        config::Echo::Count => "*".repeat(chars),
+        config::Echo::Pulse if chars == 0 => String::new(),
+        config::Echo::Pulse => (0..PULSE_CELLS)
+            .map(|cell| {
+                if cell == pulse % PULSE_CELLS {
+                    '*'
+                } else {
+                    '.'
+                }
+            })
+            .collect(),
+    }
+}
+
+/// A different, random cell. xorshift64: not cryptographic, only
+/// unpredictable enough to look at.
+fn next_pulse(pulse: usize, rng: &mut u64) -> usize {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 7;
+    *rng ^= *rng << 17;
+    let step = 1 + (*rng % (PULSE_CELLS as u64 - 1)) as usize;
+    (pulse + step) % PULSE_CELLS
+}
+
+fn seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    (nanos ^ (u64::from(std::process::id()) << 32)) | 1
+}
+
 /// Text shown while a password is being checked.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -144,6 +187,9 @@ struct Lock {
     pam_message: Option<String>,
     /// Failed attempts since locking.
     failed: u32,
+    /// The `pulse` echo's lit cell and its random state.
+    pulse: usize,
+    rng: u64,
 }
 
 impl Drop for Lock {
@@ -221,6 +267,8 @@ impl Lock {
             user,
             pam_message: None,
             failed: 0,
+            pulse: 0,
+            rng: seed(),
         };
         lock.trace("starting");
         lock.trace(&format!("keyboard: {}", lock.keyboard.backend()));
@@ -552,7 +600,7 @@ impl Lock {
             State::Prompt | State::Wrong => ("password: ", pal.foreground),
             State::Checking => ("checking... ", pal.muted),
         };
-        let dots = "*".repeat(self.input.chars().count());
+        let dots = echo(self.cfg.prompt_echo, self.input.chars().count(), self.pulse);
         let extras = self.status_lines(&pal);
         let step = line.saturating_mul(3) / 2;
         // The active layout next to the prompt when several are configured.
@@ -1023,6 +1071,12 @@ impl Lock {
         Ok(true)
     }
 
+    /// Light another cell of the `pulse` echo, chosen at random so that its
+    /// position says nothing about the length.
+    fn move_pulse(&mut self) {
+        self.pulse = next_pulse(self.pulse, &mut self.rng);
+    }
+
     /// Reset X11's real idle clock; synthetic root key events do not do that.
     fn touch_idle_clock(&self) {
         let _ = self.surface.c.force_screen_saver(ScreenSaver::RESET);
@@ -1046,10 +1100,16 @@ impl Lock {
                 self.submit()?;
                 return Ok(true);
             }
-            keyboard::Key::Erase => secret::erase_last(&mut self.input),
+            keyboard::Key::Erase => {
+                secret::erase_last(&mut self.input);
+                self.move_pulse();
+            }
             // Escape clears the entry; it never dismisses the lock.
             keyboard::Key::Clear => secret::clear(&mut self.input),
-            keyboard::Key::Text(text) => secret::push(&mut self.input, text.as_str()),
+            keyboard::Key::Text(text) => {
+                secret::push(&mut self.input, text.as_str());
+                self.move_pulse();
+            }
             keyboard::Key::Nothing => {}
         }
         self.draw()?;
@@ -1270,6 +1330,32 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulse_echo_hides_the_length() {
+        let short = echo(config::Echo::Pulse, 3, 5);
+        let long = echo(config::Echo::Pulse, 40, 5);
+        assert_eq!(short, long);
+        assert_eq!(short.chars().count(), PULSE_CELLS);
+        assert_eq!(short.matches('*').count(), 1);
+        assert_eq!(echo(config::Echo::Pulse, 0, 5), "");
+        assert_eq!(echo(config::Echo::Count, 3, 5), "***");
+    }
+
+    #[test]
+    fn the_pulse_moves_on_every_key() {
+        let mut pulse = 0;
+        let mut rng = seed();
+        let mut seen = [false; PULSE_CELLS];
+        for _ in 0..200 {
+            let next = next_pulse(pulse, &mut rng);
+            assert_ne!(next, pulse);
+            assert!(next < PULSE_CELLS);
+            seen[next] = true;
+            pulse = next;
+        }
+        assert!(seen.iter().all(|s| *s), "some cells are never lit");
+    }
 
     #[test]
     fn failed_attempts_are_counted_in_words() {
