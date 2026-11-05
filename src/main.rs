@@ -553,10 +553,14 @@ impl Lock {
     ///
     /// Also used once at start, so the window is certainly above the bar and
     /// any override-redirect window that was there before.
-    fn keep_on_top(&mut self) -> Result<()> {
+    ///
+    /// Returns true when the surface was resized and must be redrawn. A
+    /// restack needs no redraw of its own: whatever was covered arrives as an
+    /// Expose event.
+    fn keep_on_top(&mut self) -> Result<bool> {
         let root = self.surface.c.setup().roots[self.surface.screen_num].root;
         let geometry = self.surface.c.get_geometry(root)?.reply()?;
-        self.surface.resize(geometry.width, geometry.height)?;
+        let resized = self.surface.resize(geometry.width, geometry.height)?;
         self.surface.c.map_window(self.surface.win)?;
         // Only change the stack if necessary: reconfiguring in response to our
         // own ConfigureNotify otherwise creates a self-triggered event storm.
@@ -568,7 +572,7 @@ impl Lock {
             )?;
         }
         self.surface.c.flush()?;
-        Ok(())
+        Ok(resized)
     }
 
     fn update_prompt_area(&mut self) {
@@ -1179,11 +1183,15 @@ impl Lock {
                 }
             }
             if repair_display {
+                // Other clients configure their windows all the time (a
+                // session on othala did so four times a second); only a
+                // changed size or prompt output needs a full repaint.
                 match self.keep_on_top() {
-                    Ok(()) => {
+                    Ok(resized) => {
+                        let before = (self.prompt_output, self.prompt_area);
                         self.update_prompt_area();
                         repair_display = false;
-                        repaint = true;
+                        repaint |= resized || before != (self.prompt_output, self.prompt_area);
                     }
                     Err(e) => eprintln!("nirulock: coverage repair will retry: {e}"),
                 }
