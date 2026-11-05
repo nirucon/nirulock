@@ -1128,6 +1128,10 @@ impl Lock {
         let mut away_minute = u64::MAX;
         let mut repair_display = false;
         let mut pending = None;
+        // The spectrum is drawn on a 30 fps schedule, not once per loop
+        // iteration: other clients' ConfigureNotify events (several a second
+        // on a busy session) must not add extra frames in between.
+        let mut next_frame = Instant::now();
         loop {
             let mut repaint = self.check_authentication()?;
             let mut drained = false;
@@ -1228,9 +1232,16 @@ impl Lock {
                 if let Err(e) = self.draw() {
                     eprintln!("nirulock: repaint: {e}");
                 }
-            } else if cava_active {
+                next_frame = Instant::now() + CAVA_FRAME;
+            } else if cava_active && Instant::now() >= next_frame {
                 if let Err(e) = self.draw_cava_frame() {
                     eprintln!("nirulock: cava repaint: {e}");
+                }
+                // A steady cadence: the time spent drawing is not added to
+                // the interval, and a late frame restarts it.
+                next_frame += CAVA_FRAME;
+                if next_frame <= Instant::now() {
+                    next_frame = Instant::now() + CAVA_FRAME;
                 }
             }
             self.surface.c.flush()?;
@@ -1242,7 +1253,14 @@ impl Lock {
             if pending.is_some() {
                 continue;
             }
-            let timeout = if cava_active { 33 } else { self.idle_timeout() };
+            let timeout = if cava_active {
+                // At most one frame interval, so minute and DPMS deadlines
+                // are met as before.
+                let due = next_frame.saturating_duration_since(Instant::now());
+                (due.as_micros().div_ceil(1000) as i32).clamp(1, 34)
+            } else {
+                self.idle_timeout()
+            };
             let cava_wake = self.cava.as_ref().and_then(cava::Cava::wake_fd);
             let ready = wait_readable(
                 [
@@ -1258,6 +1276,7 @@ impl Lock {
                 if let Some(cava) = self.cava.as_mut() {
                     cava.woke();
                 }
+                next_frame = Instant::now();
             }
         }
     }
@@ -1293,6 +1312,9 @@ impl Lock {
         (ms + 5).clamp(1, 60_000) as i32
     }
 }
+
+/// The spectrum's frame interval: CAVA produces 30 frames per second.
+const CAVA_FRAME: Duration = Duration::from_micros(33_333);
 
 /// Wait on X, the bounded authentication worker and the CAVA silence wake-up
 /// without periodic polling. Returns which descriptors became readable.
