@@ -12,6 +12,7 @@
 //!   3. PAM decides; a missing PAM, a failed conversation or an unexpected
 //!      prompt all fail closed.
 
+mod audio;
 mod cava;
 mod config;
 mod core;
@@ -19,7 +20,9 @@ mod display;
 mod keyboard;
 mod palette;
 mod pam;
+mod quotes;
 mod secret;
+mod visual;
 
 #[derive(Debug)]
 pub struct Error(String);
@@ -166,8 +169,9 @@ struct Lock {
     renderer: core::TextRenderer,
     clock_renderer: core::TextRenderer,
     rune_renderer: Option<core::TextRenderer>,
-    cava: Option<cava::Cava>,
-    /// Display power, followed only while a spectrum is shown.
+    /// The `cava` layout's panel: the spectrum or a quote.
+    visual: Option<visual::Visual>,
+    /// Display power, followed only while the panel is shown.
     power: Option<cava::DisplayPower>,
     state: State,
     input: zeroize::Zeroizing<String>,
@@ -217,12 +221,11 @@ impl Lock {
         let setup = surface.c.setup().clone();
         let renderer = core::TextRenderer::new(&font, cfg.font_size, &setup)?;
         let clock_renderer = renderer.at_size((cfg.font_size * 2.4).max(cfg.font_size + 8.0));
-        let cava = if cfg.layout == config::Layout::Cava && cfg.visualizer {
-            Some(cava::Cava::new())
-        } else {
-            None
-        };
-        let power = cava.as_ref().map(|_| cava::DisplayPower::new(&surface.c));
+        // No file or sound-server I/O here: the quotes file and the audio
+        // detector are read on their own threads.
+        let visual = (cfg.layout == config::Layout::Cava && cfg.visual != visual::Mode::None)
+            .then(|| visual::Visual::new(cfg.visual, true, &renderer, cfg.font_size, "nirulock"));
+        let power = visual.as_ref().map(|_| cava::DisplayPower::new(&surface.c));
         let rune_renderer = core::find_rune_font(cfg.rune_font_path.as_deref())
             .map(|font| core::TextRenderer::new(&font, cfg.font_size * 2.0, &setup))
             .transpose()?;
@@ -249,7 +252,7 @@ impl Lock {
             renderer,
             clock_renderer,
             rune_renderer,
-            cava,
+            visual,
             power,
             state: State::Prompt,
             input: secret::new_entry(),
@@ -275,8 +278,8 @@ impl Lock {
         if let Some(power) = lock.power.as_ref() {
             lock.trace(&format!("display power: {}", power.mode()));
             let on = power.on();
-            if let Some(cava) = lock.cava.as_mut() {
-                cava.set_display(on);
+            if let Some(visual) = lock.visual.as_mut() {
+                visual.set_display(on);
             }
         }
         // Ask the WM and suite overlays to yield their active grabs before the
@@ -591,7 +594,6 @@ impl Lock {
         let pal = self.cfg.palette.clone();
         self.surface.clear(pal.background)?;
         self.spectrum_rect = None;
-        let spectrum = self.cava.as_mut().map(|cava| cava.values().to_vec());
         let area = self.prompt_area;
         let (centre, mid) = area.centre();
         let line = self.renderer.line_height();
@@ -912,9 +914,10 @@ impl Lock {
                     pal.muted,
                     pal.background,
                 )?;
-                if let Some(values) = spectrum.as_deref() {
-                    cava::paint(&self.surface, &pal, spec_x, spec_y, spec_w, spec_h, values)?;
-                    self.spectrum_rect = Some((spec_x, spec_y, spec_w, spec_h));
+                if let Some(visual) = self.visual.as_mut() {
+                    let rect = (spec_x, spec_y, spec_w, spec_h);
+                    visual.paint(&self.surface, &pal, rect)?;
+                    self.spectrum_rect = Some(rect);
                 }
                 let below = spec_y
                     .saturating_add(spec_h as i16)
@@ -977,26 +980,18 @@ impl Lock {
         lines
     }
 
-    /// Repaint only the CAVA panel between full frames. The clock, prompt and
-    /// lock state are static until an event or the next minute, so clearing and
-    /// uploading the whole screen at 30 fps would burn CPU for no visual gain.
+    /// Repaint only the CAVA panel (spectrum or quote) between full frames.
+    /// The clock, prompt and lock state are static until an event or the next
+    /// minute, so clearing and uploading the whole screen at 30 fps would burn
+    /// CPU for no visual gain.
     fn draw_cava_frame(&mut self) -> Result<()> {
         let Some((x, y, width, height)) = self.spectrum_rect else {
             return Ok(());
         };
-        let Some(cava) = self.cava.as_mut() else {
+        let Some(visual) = self.visual.as_mut() else {
             return Ok(());
         };
-        let values = cava.values().to_vec();
-        cava::paint(
-            &self.surface,
-            &self.cfg.palette,
-            x,
-            y,
-            width,
-            height,
-            &values,
-        )?;
+        visual.paint(&self.surface, &self.cfg.palette, (x, y, width, height))?;
         self.surface.present_rect(x, y, width, height)?;
         Ok(())
     }
@@ -1054,8 +1049,9 @@ impl Lock {
                 self.touch_idle_clock();
                 self.trace("password accepted, idle clock told");
                 // process::exit skips destructors: stop CAVA and remove its
-                // temporary config explicitly.
-                self.cava = None;
+                // temporary config explicitly. The audio detector is told to
+                // stop and is not waited for.
+                self.visual = None;
                 std::process::exit(0);
             }
             // The entry is not cleared: it was taken at submit, and anything
@@ -1226,14 +1222,21 @@ impl Lock {
                 self.display_power(on);
                 repaint = true;
             }
-            let cava_active = self.cava.as_ref().is_some_and(cava::Cava::animating);
+            // The panel follows the audio detector, the quotes loader and its
+            // own fade and rotation timers; this reads atomics only.
+            let mut panel_dirty = false;
+            if let Some(visual) = self.visual.as_mut() {
+                visual.tick(Instant::now());
+                panel_dirty = visual.take_repaint();
+            }
+            let cava_active = self.visual.as_ref().is_some_and(visual::Visual::animating);
             if repaint {
                 // Rendering/resource errors never dismiss an established lock.
                 if let Err(e) = self.draw() {
                     eprintln!("nirulock: repaint: {e}");
                 }
                 next_frame = Instant::now() + CAVA_FRAME;
-            } else if cava_active && Instant::now() >= next_frame {
+            } else if (cava_active && Instant::now() >= next_frame) || panel_dirty {
                 if let Err(e) = self.draw_cava_frame() {
                     eprintln!("nirulock: cava repaint: {e}");
                 }
@@ -1261,7 +1264,10 @@ impl Lock {
             } else {
                 self.idle_timeout()
             };
-            let cava_wake = self.cava.as_ref().and_then(cava::Cava::wake_fd);
+            let [cava_wake, visual_wake] = self
+                .visual
+                .as_ref()
+                .map_or([None, None], visual::Visual::wake_fds);
             let ready = wait_readable(
                 [
                     Some(self.surface.c.stream().as_raw_fd()),
@@ -1269,22 +1275,24 @@ impl Lock {
                         .as_ref()
                         .map(|auth| auth.wake.as_raw_fd()),
                     cava_wake,
+                    visual_wake,
                 ],
                 timeout,
             );
-            if ready[2] {
-                if let Some(cava) = self.cava.as_mut() {
-                    cava.woke();
+            if ready[2] || ready[3] {
+                if let Some(visual) = self.visual.as_mut() {
+                    visual.woke([ready[2], ready[3]]);
                 }
                 next_frame = Instant::now();
             }
         }
     }
 
-    /// Follow a display power change: stop or restart the spectrum.
+    /// Follow a display power change: stop or restart the spectrum, the
+    /// audio detector and the quote changes.
     fn display_power(&mut self, on: bool) {
-        if let Some(cava) = self.cava.as_mut() {
-            cava.set_display(on);
+        if let Some(visual) = self.visual.as_mut() {
+            visual.set_display(on);
         }
         self.trace(if on { "display on" } else { "display off" });
     }
@@ -1302,6 +1310,7 @@ impl Lock {
         for deadline in [
             self.wrong_until,
             self.power.as_ref().and_then(cava::DisplayPower::deadline),
+            self.visual.as_ref().and_then(visual::Visual::deadline),
         ]
         .into_iter()
         .flatten()
@@ -1316,18 +1325,19 @@ impl Lock {
 /// The spectrum's frame interval: CAVA produces 30 frames per second.
 const CAVA_FRAME: Duration = Duration::from_micros(33_333);
 
-/// Wait on X, the bounded authentication worker and the CAVA silence wake-up
-/// without periodic polling. Returns which descriptors became readable.
-fn wait_readable(fds: [Option<std::os::fd::RawFd>; 3], timeout_ms: i32) -> [bool; 3] {
+/// Wait on X, the bounded authentication worker, the CAVA silence wake-up and
+/// the panel's detector/loader wake-up without periodic polling. Returns which
+/// descriptors became readable.
+fn wait_readable(fds: [Option<std::os::fd::RawFd>; 4], timeout_ms: i32) -> [bool; 4] {
     let mut poll = fds.map(|fd| libc::pollfd {
         fd: fd.unwrap_or(-1),
         events: libc::POLLIN,
         revents: 0,
     });
-    // SAFETY: three valid pollfd values; poll ignores a negative unused fd.
+    // SAFETY: four valid pollfd values; poll ignores a negative unused fd.
     let n = unsafe { libc::poll(poll.as_mut_ptr(), poll.len() as libc::nfds_t, timeout_ms) };
     if n <= 0 {
-        return [false; 3];
+        return [false; 4];
     }
     poll.map(|p| p.fd >= 0 && p.revents & libc::POLLIN != 0)
 }

@@ -60,6 +60,9 @@ print(hashlib.md5(d[header + 12 * colours:]).hexdigest())'
 frames() {
   for _ in 1 2 3 4 5; do xwd -root -silent | pixels; sleep 0.2; done | sort -u | wc -l
 }
+# The spectrum alone, as before 0.19: CAVA runs whenever the display is on.
+mkdir -p "$TEST/config/niruui"
+printf 'visual = "cava"\n' > "$TEST/config/niruui/lock.toml"
 touch "$TEST/sound"
 "$BIN" > "$TEST/lock.log" 2>&1 & LOCK=$!
 sleep 2
@@ -85,3 +88,29 @@ printf 'resumed: %s distinct frames of 5 within 1 s of sound\n' "$resumed_frames
 [ "$resumed_frames" -gt 1 ] || fail "the spectrum did not resume on sound"
 kill -0 "$LOCK" || fail "the lock exited"
 printf 'PASS: silence stops the repaint (%s%% CPU), sound resumes it\n' "$silent_cpu"
+
+# visual = "auto" (the default) without a sound server: quotes, never CAVA,
+# even while the fixture would play, and a static screen between changes.
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+rm -f "$TEST/config/niruui/lock.toml"
+touch "$TEST/sound"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-auto.log" 2>&1 & LOCK=$!
+sleep 3
+kill -0 "$LOCK" || { cat "$TEST/lock-auto.log"; exit 1; }
+quotes=$TEST/config/niru/quotes.txt
+[ -f "$quotes" ] || fail "the default quotes file was not written"
+[ "$(stat -c %a "$quotes")" = 644 ] || fail "the quotes file is not 0644"
+grep -q 'runeberg.org/eddan' "$quotes" || fail "the quotes file lacks its source"
+pgrep -f "$TEST/bin/cava" > /dev/null && fail "CAVA started without music"
+auto_cpu=$(cpu "$LOCK" 6)
+auto_frames=$(frames)
+printf 'quotes:  nirulock %s%% CPU, %s distinct frames of 5, no CAVA\n' "$auto_cpu" "$auto_frames"
+[ "$auto_frames" -eq 1 ] || fail "the quote view repainted between changes"
+awk -v c="$auto_cpu" 'BEGIN { exit !(c <= 0.3) }' || fail "quote view CPU above 0.3%"
+# An existing file is never overwritten.
+printf 'Mitt eget citat\n' > "$quotes"
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-auto.log" 2>&1 & LOCK=$!
+sleep 2
+[ "$(cat "$quotes")" = "Mitt eget citat" ] || fail "the quotes file was overwritten"
+printf 'PASS: without music the panel shows quotes and CAVA never starts\n'

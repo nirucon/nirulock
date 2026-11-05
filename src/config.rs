@@ -86,6 +86,10 @@ pub struct Config {
     pub layout: Layout,
     /// Draw the CAVA spectrum in the `cava` layout.
     pub visualizer: bool,
+    /// What the `cava` layout's panel shows: `auto` (the spectrum while
+    /// music plays, quotes otherwise), `cava`, `quotes` or `none`.
+    /// `visualizer = false` without `visual` means `none`.
+    pub visual: crate::visual::Mode,
     pub palette: palette::Palette,
     /// Colour of failure feedback. Kept out of `Palette`, which is shared
     /// with NIRUSCREENSAVER: the appearance contract's `warning`, or
@@ -257,6 +261,7 @@ impl Default for Config {
             font_size: 22.0,
             layout: Layout::Cava,
             visualizer: true,
+            visual: crate::visual::Mode::Auto,
             palette: palette::Palette::default(),
             warning: DEFAULT_WARNING,
             prompt_echo: Echo::Count,
@@ -357,6 +362,13 @@ impl Config {
         }
         if let Some(enabled) = v.get("visualizer").and_then(|x| x.as_bool()) {
             cfg.visualizer = enabled;
+            if !enabled {
+                cfg.visual = crate::visual::Mode::None;
+            }
+        }
+        if let Some(visual) = v.get("visual").and_then(|x| x.as_str()) {
+            cfg.visual = crate::visual::Mode::parse(visual)
+                .ok_or_else(|| "visual must be auto, cava, quotes or none".to_string())?;
         }
         if let Some(t) = v.get("rune_font_path").and_then(|x| x.as_str()) {
             cfg.rune_font_path = Some(t.to_string());
@@ -421,13 +433,14 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
+            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nvisual: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
             self.layout.as_str(),
             self.prompt_echo.as_str(),
             if self.visualizer { "on" } else { "off" },
+            self.visual.as_str(),
             self.rune_font_path.as_deref().unwrap_or("auto"),
             self.lock_timeout_minutes,
         )
@@ -451,6 +464,22 @@ mod tests {
         let v: toml::Value = "visualizer = false".parse().unwrap();
         let c = Config::from_value(&v).unwrap();
         assert!(!c.visualizer);
+    }
+
+    #[test]
+    fn visual_defaults_to_auto_and_follows_the_old_switch() {
+        use crate::visual::Mode;
+        assert_eq!(Config::default().visual, Mode::Auto);
+        let c = |text: &str| Config::from_value(&text.parse().unwrap());
+        assert_eq!(c("visual = \"cava\"").unwrap().visual, Mode::Cava);
+        assert_eq!(c("visual = \"quotes\"").unwrap().visual, Mode::Quotes);
+        assert_eq!(c("visual = \"none\"").unwrap().visual, Mode::None);
+        assert_eq!(c("visualizer = false").unwrap().visual, Mode::None);
+        assert_eq!(c("visualizer = true").unwrap().visual, Mode::Auto);
+        // An explicit visual wins over the old switch.
+        let both = c("visualizer = false\nvisual = \"quotes\"").unwrap();
+        assert_eq!(both.visual, Mode::Quotes);
+        assert!(c("visual = \"loud\"").is_err());
     }
 
     #[test]

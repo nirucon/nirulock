@@ -6,6 +6,13 @@ font_size = 22.0
 # cava uses the active NIRUX theme and visualises system audio through CAVA.
 layout = "cava"
 visualizer = true
+# What the cava layout shows where the spectrum is drawn:
+#   "auto"   the CAVA spectrum only while music or radio plays, otherwise a
+#            quote from ~/.config/niru/quotes.txt (the default)
+#   "cava"   the spectrum alone, as before 0.19 (CAVA runs whenever the display is on)
+#   "quotes" quotes alone; CAVA never starts
+#   "none"   neither (visualizer = false also means this)
+visual = "auto"
 
 # How the prompt echoes the password: "count" shows one * per character (the
 # default); "pulse" shows a fixed row of eight cells with one lit * that moves

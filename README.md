@@ -63,11 +63,79 @@ restarted as soon as the display is on, and after two seconds of silence the
 repaint stops on a flat frame until the first sound. A locked machine with no
 audio then only wakes for the minute clock. When sound returns, the bars rise
 from the flat frame with the normal attack instead of jumping to the first
-sample, and quiet sounds just above the noise floor grow from zero. Bars follow the active
+sample, and quiet sounds just above the noise floor grow from zero. (With the
+default `visual = "auto"`, below, CAVA only runs while music plays.) Bars follow the active
 NIRUX theme's focus colour and lighter peak. Set `visualizer = false` to
 keep the cava composition without the spectrum. If CAVA is not installed, the
 lock still works and simply omits the bars; the password prompt never moves
 behind or captures the visualizer.
+
+### Music or quotes (`visual`)
+
+`visual` decides what the `cava` layout shows where the spectrum is drawn:
+
+- `auto` (the default): the CAVA spectrum only while music or radio plays, and
+  otherwise one quote from the quotes file below.
+- `cava`: the spectrum alone, exactly as before 0.19 (CAVA runs whenever the
+  display is on).
+- `quotes`: quotes alone; CAVA never starts.
+- `none`: neither; the panel stays empty. `visualizer = false` without a
+  `visual` setting means `none`, as before.
+
+With `auto`, a small PulseAudio client (PipeWire serves the same API through
+`pipewire-pulse`; libpulse is loaded at run time, so it is not a build or run
+dependency) watches the playback streams through subscription events. Only
+while a stream is playing (not corked) does it open a peak monitor on the
+default sink's monitor, at ten peaks a second delivered five times a second;
+with no stream nothing is polled at all. CAVA is started when the peak has
+stayed above about -54 dBFS for 300 ms, so an always-present but silent stream
+(an idle MIDI synthesizer) never starts it, and it is stopped and reaped, not
+just paused, after 5 s of silence. The change fades the quote out and the
+spectrum in; the bars still rise from flat with the usual attack. Without a
+sound server the panel shows quotes and the client retries in the background
+(every 2 s, backing off to once a minute). With the display off nothing runs:
+no CAVA, no peak monitor, no quote changes.
+
+A quote changes to another, chosen at random, every minute with a soft fade;
+between changes nothing is redrawn. It is drawn in the NIRUX theme font and
+colours, centred where the spectrum would be, wrapped to about 64 characters,
+with a smaller size (down to half, at least 11 px) when it is long and an
+ellipsis when it still does not fit. Attributions are muted.
+
+### The quotes file
+
+`${XDG_CONFIG_HOME:-~/.config}/niru/quotes.txt` is shared with NIRUSCREENSAVER.
+When it is missing, either program writes the default file (atomically, mode
+0644); it never overwrites an existing file, so it is yours to edit. An empty
+or unreadable file shows no quote and no error.
+
+```text
+# Lines starting with # are comments.
+Quotes are separated by one or more blank lines.
+A quote may span several lines;
+its line breaks are kept.
+— A line starting with "— " (em dash, space) or "-- " is the attribution
+
+Fä dör,
+fränder dö,
+...
+— Hávamál 76 (övers. Erik Brate, 1913)
+```
+
+To add a quote, write it anywhere in the file with a blank line before and
+after it; to remove one, delete its lines (or put `#` in front of them). The
+file's own header explains this in Swedish, with an example. Changes are
+picked up the next time the lock or screensaver starts, and while one is
+showing, at the next quote change (the file is read again when its
+modification time changed). The file is read on its own thread, never on the
+input or drawing path.
+
+The default quotes are 22 stanzas of Hávamál ("Den höges sång") in Erik
+Brate's Swedish translation, *Eddan. De nordiska guda- och hjältesångerna*
+(1913), which is in the public domain (Brate died in 1924). The text is taken
+verbatim from Project Runeberg, <https://runeberg.org/eddan/se-02.html>; the
+stanza numbers follow that edition. The source of the default file is
+[`src/quotes.txt`](src/quotes.txt).
 
 The NIRUX theme controls colours; the layout only controls composition. The lock
 always stays opaque black. `nirulock --config` prints the selected layout. Diagnostics are written to
