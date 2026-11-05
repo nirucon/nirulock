@@ -1017,7 +1017,7 @@ impl Lock {
             self.wrong_until = None;
         }
         // Keysyms, XKB levels and compose come from the keyboard module.
-        match self.keyboard.key(&self.surface.c, &e) {
+        match self.keyboard.key(&e) {
             keyboard::Key::Submit => {
                 self.submit()?;
                 return Ok(true);
@@ -1047,7 +1047,7 @@ impl Lock {
                     None => self.surface.c.poll_for_event(),
                 };
                 if let Ok(Some(event)) = &event {
-                    if self.keyboard.handle_event(event) {
+                    if self.keyboard.handle_event(&self.surface.c, event) {
                         continue;
                     }
                     if let Some(power) = self.power.as_mut() {

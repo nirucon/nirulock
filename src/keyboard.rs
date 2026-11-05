@@ -21,9 +21,10 @@
 
 use std::ffi::{c_char, c_int, c_void};
 use x11rb::{
+    connection::Connection,
     protocol::{
         xkb::{self, ConnectionExt as _},
-        xproto::{ConnectionExt as _, KeyButMask, KeyPressEvent},
+        xproto::{ConnectionExt as _, GetModifierMappingReply, KeyButMask, KeyPressEvent},
         Event,
     },
     rust_connection::RustConnection,
@@ -573,6 +574,8 @@ impl Drop for Xkb {
 /// Translates key presses for the prompt.
 pub struct Keyboard {
     xkb: Option<Xkb>,
+    /// Only loaded when libxkbcommon is not available.
+    core: Option<CoreMap>,
     builtin: BuiltinCompose,
 }
 
@@ -580,8 +583,14 @@ impl Keyboard {
     pub fn new(c: &RustConnection) -> Self {
         let events = select_xkb_events(c);
         let xkb = if events { Xkb::new() } else { None };
+        let core = if xkb.is_none() {
+            CoreMap::load(c)
+        } else {
+            None
+        };
         Self {
             xkb,
+            core,
             builtin: BuiltinCompose::default(),
         }
     }
@@ -597,7 +606,7 @@ impl Keyboard {
 
     /// Keep the keymap and modifier state current. Returns true when the
     /// event was a keyboard event.
-    pub fn handle_event(&mut self, event: &Event) -> bool {
+    pub fn handle_event(&mut self, c: &RustConnection, event: &Event) -> bool {
         match event {
             Event::XkbStateNotify(e) => {
                 if let Some(xkb) = self.xkb.as_mut() {
@@ -612,7 +621,15 @@ impl Keyboard {
                 }
                 true
             }
-            Event::MappingNotify(_) => true,
+            Event::MappingNotify(_) => {
+                if self.xkb.is_none() {
+                    // Keep the previous map if the reload fails.
+                    if let Some(core) = CoreMap::load(c) {
+                        self.core = Some(core);
+                    }
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -629,11 +646,14 @@ impl Keyboard {
     }
 
     /// Translate one key press. Never logs anything about the key.
-    pub fn key(&mut self, c: &RustConnection, e: &KeyPressEvent) -> Key {
+    pub fn key(&mut self, e: &KeyPressEvent) -> Key {
         let keycode = u32::from(e.detail);
         let (sym, xkb_text) = match self.xkb.as_ref() {
             Some(xkb) => (xkb.sym(keycode), true),
-            None => (core_sym(c, e).unwrap_or(0), false),
+            None => (
+                self.core.as_ref().map(|core| core.sym(e)).unwrap_or(0),
+                false,
+            ),
         };
         match sym {
             XK_RETURN | XK_KP_ENTER => {
@@ -713,14 +733,72 @@ fn select_xkb_events(c: &RustConnection) -> bool {
     .is_some()
 }
 
-/// Core-protocol keysym lookup, used only without libxkbcommon.
-///
-/// A keycode has several keysym levels: unshifted, shifted, AltGr and so
-/// on. Caps Lock is applied separately, as X does: it shifts letters but not
-/// digits or punctuation.
-fn core_sym(c: &RustConnection, e: &KeyPressEvent) -> Option<u32> {
-    let map = c.get_keyboard_mapping(e.detail, 1).ok()?.reply().ok()?;
-    Some(level_sym(&map.keysyms, e.state, KeyButMask::MOD2))
+/// The core keymap, cached for the fallback path. One request at start and
+/// one after each MappingNotify, instead of one round trip per key press.
+struct CoreMap {
+    min_keycode: u8,
+    per_keycode: usize,
+    syms: Vec<u32>,
+    /// The modifier bit that Num_Lock is mapped to (usually Mod2).
+    numlock: KeyButMask,
+}
+
+const XK_NUM_LOCK: u32 = 0xff7f;
+
+impl CoreMap {
+    fn load(c: &RustConnection) -> Option<Self> {
+        let setup = c.setup();
+        let (min, max) = (setup.min_keycode, setup.max_keycode);
+        let map = c
+            .get_keyboard_mapping(min, max.saturating_sub(min).saturating_add(1))
+            .ok()?
+            .reply()
+            .ok()?;
+        let per_keycode = usize::from(map.keysyms_per_keycode);
+        let mut core = Self {
+            min_keycode: min,
+            per_keycode,
+            syms: map.keysyms,
+            numlock: KeyButMask::from(0u16),
+        };
+        core.numlock = c
+            .get_modifier_mapping()
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|modmap| core.numlock_mask(&modmap))
+            .unwrap_or(KeyButMask::MOD2);
+        Some(core)
+    }
+
+    fn numlock_mask(&self, modmap: &GetModifierMappingReply) -> Option<KeyButMask> {
+        let per = usize::from(modmap.keycodes_per_modifier());
+        if per == 0 {
+            return None;
+        }
+        modmap
+            .keycodes
+            .chunks(per)
+            .position(|codes| {
+                codes
+                    .iter()
+                    .any(|code| *code != 0 && self.keysyms(*code).contains(&XK_NUM_LOCK))
+            })
+            .map(|index| KeyButMask::from(1u16 << index))
+    }
+
+    fn keysyms(&self, keycode: u8) -> &[u32] {
+        let Some(index) = keycode.checked_sub(self.min_keycode) else {
+            return &[];
+        };
+        let start = usize::from(index) * self.per_keycode;
+        self.syms
+            .get(start..start + self.per_keycode)
+            .unwrap_or(&[])
+    }
+
+    fn sym(&self, e: &KeyPressEvent) -> u32 {
+        level_sym(self.keysyms(e.detail), e.state, self.numlock)
+    }
 }
 
 /// Keypad keysyms that NumLock selects: KP_Space..KP_9 and KP_Equal.
@@ -912,6 +990,38 @@ mod tests {
             assert_eq!(keysym_char(sym), Some(c));
         }
         assert_eq!(keysym_char(XK_KP_ENTER), None, "KP_Enter submits instead");
+    }
+
+    #[test]
+    fn cached_core_map_finds_keysyms_and_numlock() {
+        let mut core = CoreMap {
+            min_keycode: 8,
+            per_keycode: 2,
+            syms: vec![0; 2 * 100],
+            numlock: KeyButMask::from(0u16),
+        };
+        // Keycode 77 is Num_Lock, keycode 87 is KP_End/KP_1.
+        core.syms[(77 - 8) * 2] = XK_NUM_LOCK;
+        core.syms[(87 - 8) * 2] = 0xff9c;
+        core.syms[(87 - 8) * 2 + 1] = 0xffb1;
+        assert_eq!(core.keysyms(87), [0xff9c, 0xffb1]);
+        assert!(core.keysyms(7).is_empty());
+        assert!(core.keysyms(255).is_empty());
+        let mut keycodes = vec![0u8; 8];
+        keycodes[4] = 77; // Mod2, one keycode per modifier
+        let modmap = GetModifierMappingReply {
+            sequence: 0,
+            length: 0,
+            keycodes,
+        };
+        assert_eq!(core.numlock_mask(&modmap), Some(KeyButMask::MOD2));
+        core.numlock = KeyButMask::MOD2;
+        let e = KeyPressEvent {
+            detail: 87,
+            state: KeyButMask::MOD2,
+            ..Default::default()
+        };
+        assert_eq!(core.sym(&e), 0xffb1);
     }
 
     #[test]
