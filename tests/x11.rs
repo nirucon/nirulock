@@ -61,7 +61,6 @@ fn later_overlays_cannot_cover_the_lock() {
     .unwrap();
     let _lock = Running(
         Command::new(env!("CARGO_BIN_EXE_nirulock"))
-            .env("USER", "nirulock-no-such-user")
             .spawn()
             .unwrap(),
     );
@@ -409,7 +408,6 @@ fn timeout_cannot_unlock_and_rejected_input_stays_isolated() {
     connection.flush().unwrap();
     let mut lock = Running(
         Command::new(env!("CARGO_BIN_EXE_nirulock"))
-            .env("USER", "nirulock-no-such-user")
             .env("XDG_CONFIG_HOME", directory.join("config"))
             .env("XDG_STATE_HOME", directory.join("state"))
             .env("NIRULOCK_SAFE_SECONDS", "1")

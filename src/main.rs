@@ -124,6 +124,7 @@ struct Lock {
     ready: bool,
     caps: bool,
     keyboard: keyboard::Keyboard,
+    user: String,
 }
 
 impl Drop for Lock {
@@ -139,6 +140,9 @@ impl Drop for Lock {
 
 impl Lock {
     fn new() -> Result<Self> {
+        // Resolve the account before anything is grabbed or shown: a lock
+        // that cannot name its owner must not start at all.
+        let user = pam::current_user().map_err(|e| format!("refusing to lock: {e}"))?;
         let cfg = config::Config::load()?;
         let surface = core::Surface::new("NIRULOCK")?;
         let font = core::find_font(cfg.font_path.as_deref());
@@ -195,6 +199,7 @@ impl Lock {
             ready: false,
             caps,
             keyboard,
+            user,
         };
         lock.trace("starting");
         lock.trace(&format!("keyboard: {}", lock.keyboard.backend()));
@@ -898,7 +903,7 @@ impl Lock {
         if self.authentication.is_some() {
             return Ok(());
         }
-        let user = pam::current_user();
+        let user = self.user.clone();
         let password = std::mem::take(&mut self.input);
         match Authentication::start(user, password) {
             Ok(worker) => {

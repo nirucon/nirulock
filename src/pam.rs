@@ -126,21 +126,44 @@ unsafe extern "C" fn conversation(
     PAM_SUCCESS
 }
 
-/// The account to authenticate: the owner of this session.
+/// The account to authenticate: the owner of this process.
+///
+/// It comes from the password database for the real user id, never from
+/// `$USER` or a fallback account: in a broken environment the old fallback
+/// to `root` would have let the root password unlock a user's screen. A
+/// failure is an error, and the lock refuses to start.
 #[allow(dead_code)] // used by the lock screen binary only
-pub fn current_user() -> String {
-    if let Ok(u) = std::env::var("USER") {
-        if !u.is_empty() {
-            return u;
+pub fn current_user() -> Result<String, String> {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    user_for(unsafe { libc::getuid() })
+}
+
+/// The account name for `uid` through `getpwuid_r`.
+#[allow(dead_code)] // used by the lock screen binary only
+pub fn user_for(uid: libc::uid_t) -> Result<String, String> {
+    let mut buf: Vec<c_char> = vec![0; 1024];
+    loop {
+        // SAFETY: a zeroed passwd is a valid out-parameter; the buffer and
+        // its length match, and the strings it points to live in `buf`.
+        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        let rc =
+            unsafe { libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut found) };
+        if rc == libc::ERANGE && buf.len() < 1 << 20 {
+            let len = buf.len() * 2;
+            buf.resize(len, 0);
+            continue;
         }
-    }
-    if let Ok(out) = std::process::Command::new("id").arg("-un").output() {
-        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !name.is_empty() {
-            return name;
+        if rc != 0 || found.is_null() || pwd.pw_name.is_null() {
+            return Err(format!("no account for user id {uid}"));
         }
+        // SAFETY: pw_name is a NUL-terminated string inside `buf`.
+        let name = unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) };
+        return match name.to_str() {
+            Ok(name) if !name.is_empty() => Ok(name.to_string()),
+            _ => Err(format!("unusable account name for user id {uid}")),
+        };
     }
-    "root".to_string()
 }
 
 /// Verify `password` for `user`. Only `PAM_SUCCESS` is a success.
@@ -196,8 +219,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_user_is_not_empty() {
-        assert!(!current_user().is_empty());
+    fn current_user_comes_from_the_password_database() {
+        let uid = unsafe { libc::getuid() };
+        let user = current_user().unwrap();
+        assert!(!user.is_empty());
+        assert_eq!(user, user_for(uid).unwrap());
+        // `$USER` is not trusted.
+        std::env::set_var("USER", "nirulock-not-this-account");
+        assert_eq!(current_user().unwrap(), user);
+    }
+
+    #[test]
+    fn a_missing_account_is_an_error_not_a_fallback() {
+        assert_eq!(user_for(0).unwrap(), "root");
+        let missing = user_for(libc::uid_t::MAX - 7);
+        assert!(missing.is_err(), "unexpected account {missing:?}");
     }
 
     #[test]
