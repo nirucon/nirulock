@@ -19,6 +19,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::sync::Mutex;
+use zeroize::Zeroize;
 
 const PAM_SUCCESS: c_int = 0;
 const PAM_SILENT: c_int = 0x8000;
@@ -66,58 +67,89 @@ extern "C" {
     ) -> c_int;
     fn pam_authenticate(handle: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_end(handle: *mut PamHandle, status: c_int) -> c_int;
-    fn calloc(n: usize, size: usize) -> *mut c_void;
-    fn free(p: *mut c_void);
-    fn strdup(s: *const c_char) -> *mut c_char;
 }
 
 static PAM_LOCK: Mutex<()> = Mutex::new(());
-static PASSWORD: Mutex<Option<String>> = Mutex::new(None);
+
+/// What the conversation needs during one `pam_authenticate`, passed as the
+/// conversation's `appdata_ptr`. The password is borrowed from the caller's
+/// zeroizing buffer, so no process-wide copy exists.
+struct Conversation<'a> {
+    password: &'a [u8],
+}
+
+/// A `malloc`ed, NUL-terminated copy of `bytes` for a PAM response.
+///
+/// PAM owns the response once it is returned and frees it; Linux-PAM and
+/// OpenPAM overwrite responses before freeing them (`_pam_drop_reply`). This
+/// is the only copy made, so there is no intermediate `CString` to wipe.
+unsafe fn response_copy(bytes: &[u8]) -> Option<*mut c_char> {
+    if bytes.contains(&0) {
+        return None;
+    }
+    let copy = libc::malloc(bytes.len() + 1) as *mut u8;
+    if copy.is_null() {
+        return None;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), copy, bytes.len());
+    *copy.add(bytes.len()) = 0;
+    Some(copy as *mut c_char)
+}
+
+/// Overwrite a NUL-terminated buffer in place.
+unsafe fn wipe(text: *mut c_char) {
+    if !text.is_null() {
+        let len = libc::strlen(text);
+        std::slice::from_raw_parts_mut(text as *mut u8, len).zeroize();
+    }
+}
+
+/// Wipe and free the responses of an aborted conversation.
+unsafe fn discard(out: *mut PamResponse, n: usize) {
+    for i in 0..n {
+        let response = (*out.add(i)).resp;
+        if !response.is_null() {
+            wipe(response);
+            libc::free(response as *mut c_void);
+        }
+    }
+    libc::free(out as *mut c_void);
+}
 
 /// PAM conversation: supply the password, ignore chatter, abort otherwise.
 unsafe extern "C" fn conversation(
     num_msg: c_int,
     msg: *mut *const PamMessage,
     resp: *mut *mut PamResponse,
-    _appdata: *mut c_void,
+    appdata: *mut c_void,
 ) -> c_int {
     if num_msg <= 0 || msg.is_null() || resp.is_null() {
         return PAM_CONV_ERR;
     }
-    let password = PASSWORD.lock().ok().and_then(|p| p.clone());
+    let data = (appdata as *mut Conversation).as_mut();
     let n = num_msg as usize;
-    let out = calloc(n, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
+    // calloc: every response starts as a null pointer with return code 0.
+    let out = libc::calloc(n, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
     if out.is_null() {
         return PAM_CONV_ERR;
     }
     for i in 0..n {
         let m = *msg.add(i);
         if m.is_null() {
-            free(out as *mut c_void);
+            discard(out, n);
             return PAM_CONV_ERR;
         }
-        (*out.add(i)).resp = std::ptr::null_mut();
-        (*out.add(i)).resp_retcode = 0;
         match (*m).msg_style {
             PAM_PROMPT_ECHO_OFF => {
-                let Some(pw) = password.as_deref() else {
-                    free(out as *mut c_void);
+                let Some(copy) = data.as_ref().and_then(|data| response_copy(data.password)) else {
+                    discard(out, n);
                     return PAM_CONV_ERR;
                 };
-                let Ok(c) = CString::new(pw) else {
-                    free(out as *mut c_void);
-                    return PAM_CONV_ERR;
-                };
-                let dup = strdup(c.as_ptr());
-                if dup.is_null() {
-                    free(out as *mut c_void);
-                    return PAM_CONV_ERR;
-                }
-                (*out.add(i)).resp = dup;
+                (*out.add(i)).resp = copy;
             }
             PAM_ERROR_MSG | PAM_TEXT_INFO => { /* no reply needed */ }
             _ => {
-                free(out as *mut c_void);
+                discard(out, n);
                 return PAM_CONV_ERR;
             }
         }
@@ -168,50 +200,41 @@ pub fn user_for(uid: libc::uid_t) -> Result<String, String> {
 
 /// Verify `password` for `user`. Only `PAM_SUCCESS` is a success.
 pub fn authenticate(user: &str, password: &str) -> Result<bool, String> {
-    // Serialize the complete password lifetime, including assignment/erasure.
+    // One authentication at a time.
     let _guard = PAM_LOCK.lock().map_err(|_| "PAM state poisoned")?;
     let cuser = CString::new(user).map_err(|_| "invalid user name")?;
-    if let Ok(mut p) = PASSWORD.lock() {
-        *p = Some(password.to_string());
-    }
-    let result = {
-        // One authentication at a time: the conversation callback reads a
-        // process-wide password.
-        let conv = PamConv {
-            conv: Some(conversation),
-            appdata_ptr: std::ptr::null_mut(),
-        };
-        // Prefer the dedicated `nirulock` service the installer provides.
-        // It uses the authentication stack only; `login` on Void additionally
-        // requires a shell in /etc/shells and refuses when /etc/nologin
-        // exists, which made a locked screen impossible to unlock. `login`
-        // stays as a fallback so a missing service file never locks the user
-        // out of their own session.
-        let mut handle: *mut PamHandle = std::ptr::null_mut();
-        let mut rc = PAM_SUCCESS;
-        for service in ["nirulock", "login"] {
-            let svc = CString::new(service).unwrap();
-            rc = unsafe { pam_start(svc.as_ptr(), cuser.as_ptr(), &conv, &mut handle) };
-            if rc == PAM_SUCCESS && !handle.is_null() {
-                break;
-            }
-            handle = std::ptr::null_mut();
-        }
-        if rc != PAM_SUCCESS || handle.is_null() {
-            Err(format!("PAM could not start (error {rc})"))
-        } else {
-            let auth = unsafe { pam_authenticate(handle, PAM_SILENT) };
-            unsafe {
-                pam_end(handle, auth);
-            }
-            Ok(auth == PAM_SUCCESS)
-        }
+    let mut data = Conversation {
+        password: password.as_bytes(),
     };
-    // Never keep the password around after the attempt.
-    if let Ok(mut p) = PASSWORD.lock() {
-        *p = None;
+    let conv = PamConv {
+        conv: Some(conversation),
+        appdata_ptr: &mut data as *mut Conversation as *mut c_void,
+    };
+    // Prefer the dedicated `nirulock` service the installer provides.
+    // It uses the authentication stack only; `login` on Void additionally
+    // requires a shell in /etc/shells and refuses when /etc/nologin
+    // exists, which made a locked screen impossible to unlock. `login`
+    // stays as a fallback so a missing service file never locks the user
+    // out of their own session.
+    let mut handle: *mut PamHandle = std::ptr::null_mut();
+    let mut rc = PAM_SUCCESS;
+    for service in ["nirulock", "login"] {
+        let svc = CString::new(service).unwrap();
+        rc = unsafe { pam_start(svc.as_ptr(), cuser.as_ptr(), &conv, &mut handle) };
+        if rc == PAM_SUCCESS && !handle.is_null() {
+            break;
+        }
+        handle = std::ptr::null_mut();
     }
-    result
+    if rc != PAM_SUCCESS || handle.is_null() {
+        return Err(format!("PAM could not start (error {rc})"));
+    }
+    // `data` and `conv` outlive pam_end, the last call that may converse.
+    let auth = unsafe { pam_authenticate(handle, PAM_SILENT) };
+    unsafe {
+        pam_end(handle, auth);
+    }
+    Ok(auth == PAM_SUCCESS)
 }
 
 #[cfg(test)]
@@ -243,6 +266,49 @@ mod tests {
         if let Ok(ok) = authenticate("nirulock-no-such-user", "definitely-wrong") {
             assert!(!ok);
         }
+    }
+
+    #[test]
+    fn response_copies_are_wiped_in_place() {
+        unsafe {
+            let copy = response_copy(b"fixture-secret").unwrap();
+            assert_eq!(std::ffi::CStr::from_ptr(copy).to_bytes(), b"fixture-secret");
+            let len = libc::strlen(copy);
+            wipe(copy);
+            let bytes = std::slice::from_raw_parts(copy as *const u8, len);
+            assert!(bytes.iter().all(|b| *b == 0), "response not wiped");
+            libc::free(copy as *mut c_void);
+            assert!(response_copy(b"inner\0nul").is_none());
+        }
+    }
+
+    #[test]
+    fn conversation_answers_echo_off_with_the_password_only() {
+        let prompt = PamMessage {
+            msg_style: PAM_PROMPT_ECHO_OFF,
+            msg: b"Password: \0".as_ptr() as *const c_char,
+        };
+        let mut msgs = [&prompt as *const PamMessage];
+        let mut out: *mut PamResponse = std::ptr::null_mut();
+        let mut data = Conversation {
+            password: b"fixture",
+        };
+        let rc = unsafe {
+            conversation(
+                1,
+                msgs.as_mut_ptr(),
+                &mut out,
+                &mut data as *mut Conversation as *mut c_void,
+            )
+        };
+        assert_eq!(rc, PAM_SUCCESS);
+        unsafe {
+            assert_eq!(std::ffi::CStr::from_ptr((*out).resp).to_bytes(), b"fixture");
+            discard(out, 1);
+        }
+        // Without conversation data there is no password to give: fail.
+        let rc = unsafe { conversation(1, msgs.as_mut_ptr(), &mut out, std::ptr::null_mut()) };
+        assert_ne!(rc, PAM_SUCCESS);
     }
 
     #[test]

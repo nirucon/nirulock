@@ -19,6 +19,7 @@ mod display;
 mod keyboard;
 mod palette;
 mod pam;
+mod secret;
 
 #[derive(Debug)]
 pub struct Error(String);
@@ -81,7 +82,9 @@ struct Authentication {
 }
 
 impl Authentication {
-    fn start(user: String, password: String) -> Result<Self> {
+    /// The password moves into the worker in its zeroizing buffer and is
+    /// wiped when the worker drops it.
+    fn start(user: String, password: zeroize::Zeroizing<String>) -> Result<Self> {
         let (wake, mut notify) = UnixStream::pair()?;
         wake.set_nonblocking(true)?;
         notify.set_nonblocking(true)?;
@@ -112,7 +115,7 @@ struct Lock {
     /// Display power, followed only while a spectrum is shown.
     power: Option<cava::DisplayPower>,
     state: State,
-    input: String,
+    input: zeroize::Zeroizing<String>,
     started: Instant,
     message: String,
     wm_notified: bool,
@@ -187,7 +190,7 @@ impl Lock {
             cava,
             power,
             state: State::Prompt,
-            input: String::new(),
+            input: secret::new_entry(),
             started: Instant::now(),
             message: String::new(),
             wm_notified: false,
@@ -904,7 +907,7 @@ impl Lock {
             return Ok(());
         }
         let user = self.user.clone();
-        let password = std::mem::take(&mut self.input);
+        let password = std::mem::replace(&mut self.input, secret::new_entry());
         match Authentication::start(user, password) {
             Ok(worker) => {
                 self.authentication = Some(worker);
@@ -954,12 +957,12 @@ impl Lock {
             Ok(false) => {
                 self.state = State::Wrong;
                 self.message = "wrong password".to_string();
-                self.input.clear();
+                secret::clear(&mut self.input);
             }
             Err(e) => {
                 self.state = State::Wrong;
                 self.message = format!("cannot verify: {e}");
-                self.input.clear();
+                secret::clear(&mut self.input);
             }
         }
         // Keep event handling and verified grabs active during failure feedback.
@@ -995,19 +998,10 @@ impl Lock {
                 self.submit()?;
                 return Ok(true);
             }
-            keyboard::Key::Erase => {
-                self.input.pop();
-            }
-            keyboard::Key::Clear => {
-                // Escape clears the entry; it never dismisses the lock.
-                self.input.clear();
-            }
-            keyboard::Key::Text(text) => {
-                let text = text.as_str();
-                if self.input.len() + text.len() <= 4096 {
-                    self.input.push_str(text);
-                }
-            }
+            keyboard::Key::Erase => secret::erase_last(&mut self.input),
+            // Escape clears the entry; it never dismisses the lock.
+            keyboard::Key::Clear => secret::clear(&mut self.input),
+            keyboard::Key::Text(text) => secret::push(&mut self.input, text.as_str()),
             keyboard::Key::Nothing => {}
         }
         self.draw()?;

@@ -20,8 +20,8 @@ esac
 install -m 644 "/src/pam/$1/nirulock" /etc/pam.d/nirulock
 useradd -m -s /bin/sh tester
 printf 'tester:fixture-password\n' | chpasswd -c SHA512
-su -s /bin/sh tester -c '/src/target/release/pamcheck tester fixture-password'
-if su -s /bin/sh tester -c '/src/target/release/pamcheck tester wrong-password'; then
+printf 'fixture-password\n' | su -s /bin/sh tester -c '/src/target/release/pamcheck tester'
+if printf 'wrong-password\n' | su -s /bin/sh tester -c '/src/target/release/pamcheck tester'; then
   printf 'FAIL: wrong password authenticated\n' >&2
   exit 1
 fi

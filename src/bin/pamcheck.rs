@@ -1,14 +1,26 @@
 //! Internal check: verify one password against PAM without needing X.
 //!
 //! Built from the same module as the lock screen, so a CI test exercises the
-//! real authentication path including the service fallback.
+//! real authentication path including the service fallback. The password is
+//! read from the first line of standard input, never from the command line.
 #[path = "../pam.rs"]
 mod pam;
 
+use std::io::BufRead;
+use zeroize::Zeroizing;
+
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let user = args.next().expect("usage: pamcheck USER PASSWORD");
-    let password = args.next().expect("usage: pamcheck USER PASSWORD");
+    let user = std::env::args()
+        .nth(1)
+        .expect("usage: pamcheck USER < password");
+    let mut password = Zeroizing::new(String::with_capacity(4096));
+    if std::io::stdin().lock().read_line(&mut password).is_err() {
+        println!("ERROR cannot read the password from stdin");
+        std::process::exit(2)
+    }
+    while password.ends_with('\n') || password.ends_with('\r') {
+        password.pop();
+    }
     match pam::authenticate(&user, &password) {
         Ok(true) => {
             println!("AUTH OK");
