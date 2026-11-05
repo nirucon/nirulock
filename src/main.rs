@@ -67,6 +67,18 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
+/// How long a failure is shown in the warning colour.
+const WRONG_FEEDBACK: Duration = Duration::from_secs(2);
+
+/// "1 failed attempt", "2 failed attempts".
+fn failed_text(n: u32) -> String {
+    if n == 1 {
+        "1 failed attempt".to_string()
+    } else {
+        format!("{n} failed attempts")
+    }
+}
+
 /// Text shown while a password is being checked.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -130,6 +142,8 @@ struct Lock {
     user: String,
     /// What PAM said during the last failed attempt (sanitized, never logged).
     pam_message: Option<String>,
+    /// Failed attempts since locking.
+    failed: u32,
 }
 
 impl Drop for Lock {
@@ -206,6 +220,7 @@ impl Lock {
             keyboard,
             user,
             pam_message: None,
+            failed: 0,
         };
         lock.trace("starting");
         lock.trace(&format!("keyboard: {}", lock.keyboard.backend()));
@@ -531,10 +546,11 @@ impl Lock {
         let hostname = core::hostname();
         let clock = core::clock_text(Local::now());
         let away = self.started.elapsed().as_secs();
+        // The entry stays usable during checking and failure feedback; the
+        // reason for a failure is shown on its own line below.
         let (label, colour) = match self.state {
-            State::Prompt => ("password: ".to_string(), pal.foreground),
-            State::Checking => ("checking...".to_string(), pal.muted),
-            State::Wrong => (self.message.clone(), pal.focus),
+            State::Prompt | State::Wrong => ("password: ", pal.foreground),
+            State::Checking => ("checking... ", pal.muted),
         };
         let dots = "*".repeat(self.input.chars().count());
         let extras = self.status_lines(&pal);
@@ -891,10 +907,17 @@ impl Lock {
     /// keyboard indicators.
     fn status_lines(&self, pal: &palette::Palette) -> Vec<(String, u32)> {
         let mut lines = Vec::new();
-        if self.state != State::Checking {
-            if let Some(message) = self.pam_message.as_ref() {
-                lines.push((message.clone(), pal.muted));
-            }
+        match (self.state, self.pam_message.as_ref()) {
+            // For two seconds after a failure: the reason, in the warning
+            // colour. PAM's own words win over the generic message.
+            (State::Wrong, Some(message)) => lines.push((message.clone(), self.cfg.warning)),
+            (State::Wrong, None) => lines.push((self.message.clone(), self.cfg.warning)),
+            // Afterwards PAM's message (a faillock lockout) stays readable.
+            (State::Prompt, Some(message)) => lines.push((message.clone(), pal.muted)),
+            _ => {}
+        }
+        if self.failed > 0 {
+            lines.push((failed_text(self.failed), pal.muted));
         }
         if self.caps {
             lines.push(("Caps Lock".to_string(), pal.focus));
@@ -930,6 +953,7 @@ impl Lock {
         if self.authentication.is_some() {
             return Ok(());
         }
+        self.wrong_until = None;
         let user = self.user.clone();
         let password = std::mem::replace(&mut self.input, secret::new_entry());
         match Authentication::start(user, password) {
@@ -941,7 +965,7 @@ impl Lock {
             Err(_) => {
                 self.state = State::Wrong;
                 self.message = "cannot start authentication".into();
-                self.wrong_until = Some(Instant::now() + Duration::from_millis(600));
+                self.wrong_until = Some(Instant::now() + WRONG_FEEDBACK);
             }
         }
         self.draw()
@@ -979,22 +1003,23 @@ impl Lock {
                 self.trace("password accepted, idle clock told");
                 std::process::exit(0);
             }
+            // The entry is not cleared: it was taken at submit, and anything
+            // in it now was typed during the check.
             Ok(outcome) => {
                 self.state = State::Wrong;
                 self.message = "wrong password".to_string();
                 // Shown under the prompt, for example pam_faillock's lockout.
                 self.pam_message = outcome.message;
-                secret::clear(&mut self.input);
+                self.failed = self.failed.saturating_add(1);
             }
             Err(e) => {
                 self.state = State::Wrong;
                 self.message = format!("cannot verify: {e}");
                 self.pam_message = None;
-                secret::clear(&mut self.input);
             }
         }
         // Keep event handling and verified grabs active during failure feedback.
-        self.wrong_until = Some(Instant::now() + Duration::from_millis(600));
+        self.wrong_until = Some(Instant::now() + WRONG_FEEDBACK);
         Ok(true)
     }
 
@@ -1013,13 +1038,8 @@ impl Lock {
         // is accepted. Announcing each key the lock screen takes keeps the
         // clock honest the whole time, not only when it unlocks.
         self.touch_idle_clock();
-        if self.state == State::Checking {
-            return Ok(true);
-        }
-        if self.state == State::Wrong {
-            self.state = State::Prompt;
-            self.wrong_until = None;
-        }
+        // Input stays enabled while a password is checked and while the
+        // failure is shown; Enter during a check is ignored by submit().
         // Keysyms, XKB levels and compose come from the keyboard module.
         match self.keyboard.key(&e) {
             keyboard::Key::Submit => {
@@ -1244,5 +1264,17 @@ fn main() {
             eprintln!("Usage: nirulock [--version|--config|--lock]");
             std::process::exit(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_attempts_are_counted_in_words() {
+        assert_eq!(failed_text(1), "1 failed attempt");
+        assert_eq!(failed_text(2), "2 failed attempts");
+        assert_eq!(WRONG_FEEDBACK, Duration::from_secs(2));
     }
 }

@@ -48,6 +48,8 @@ impl Layout {
 /// manager instead of niruidle. Reading the same numbers means changing the
 /// lock delay once changes it everywhere.
 pub const LADDER_PATH: &str = "screensaver.toml";
+/// The appearance contract's default `warning` colour.
+pub const DEFAULT_WARNING: u32 = 0xd7b36a;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -58,6 +60,10 @@ pub struct Config {
     /// Draw the CAVA spectrum in the `cava` layout.
     pub visualizer: bool,
     pub palette: palette::Palette,
+    /// Colour of failure feedback. Kept out of `Palette`, which is shared
+    /// with NIRUSCREENSAVER: the appearance contract's `warning`, or
+    /// `[palette] warning` in lock.toml.
+    pub warning: u32,
     /// Deprecated compatibility input. Never used to dismiss a lock.
     pub lock_timeout_minutes: u64,
 }
@@ -224,6 +230,7 @@ impl Default for Config {
             layout: Layout::Cava,
             visualizer: true,
             palette: palette::Palette::default(),
+            warning: DEFAULT_WARNING,
             lock_timeout_minutes: 0,
         }
     }
@@ -331,6 +338,7 @@ impl Config {
                     .and_then(palette::parse_hex)
                     .unwrap_or(fallback)
             };
+            cfg.warning = get("warning", cfg.warning);
             let d = cfg.palette.clone();
             cfg.palette = palette::Palette {
                 background: get("background", d.background),
@@ -341,6 +349,18 @@ impl Config {
             };
         }
         if let Some(appearance) = appearance_value(&config_home()) {
+            let explicit = v
+                .get("palette")
+                .and_then(|p| p.get("warning"))
+                .and_then(|w| w.as_str())
+                .and_then(palette::parse_hex);
+            if explicit.is_none() {
+                if let Some(colour) =
+                    appearance_colour(&appearance, "warning").and_then(|s| palette::parse_hex(&s))
+                {
+                    cfg.warning = colour;
+                }
+            }
             if v.get("font_size").is_none() {
                 if let Some(size) = appearance
                     .get("font")
@@ -404,6 +424,14 @@ mod tests {
         let v: toml::Value = "font_size = 18.0".parse().unwrap();
         let c = Config::from_value(&v).unwrap();
         assert_eq!(c.font_size, 18.0);
+    }
+
+    #[test]
+    fn warning_colour_defaults_and_overrides() {
+        let c = Config::from_value(&toml::Value::Table(Default::default())).unwrap();
+        assert_eq!(c.warning, DEFAULT_WARNING);
+        let v: toml::Value = "[palette]\nwarning = \"ff0000\"".parse().unwrap();
+        assert_eq!(Config::from_value(&v).unwrap().warning, 0xff0000);
     }
 
     #[test]
