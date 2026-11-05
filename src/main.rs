@@ -16,6 +16,7 @@ mod cava;
 mod config;
 mod core;
 mod display;
+mod keyboard;
 mod palette;
 mod pam;
 
@@ -120,6 +121,7 @@ struct Lock {
     spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
+    keyboard: keyboard::Keyboard,
 }
 
 impl Drop for Lock {
@@ -168,6 +170,7 @@ impl Lock {
                 .map(|r| r.mask.contains(KeyButMask::LOCK))
                 .unwrap_or(false)
         };
+        let keyboard = keyboard::Keyboard::new(&surface.c);
         let mut lock = Self {
             surface,
             cfg,
@@ -187,8 +190,10 @@ impl Lock {
             spectrum_rect: None,
             ready: false,
             caps,
+            keyboard,
         };
         lock.trace("starting");
+        lock.trace(&format!("keyboard: {}", lock.keyboard.backend()));
         // Ask the WM and suite overlays to yield their active grabs before the
         // lock takes over. The WM can release its own drag/keyboard grabs; the
         // launcher must close itself because its input grab belongs to another
@@ -968,84 +973,29 @@ impl Lock {
             self.state = State::Prompt;
             self.wrong_until = None;
         }
-        // Map the keycode to a printable character through the keyboard map.
-        let sym = self.keystring(e)?;
-        match sym.as_str() {
-            "\r" | "\n" => {
+        // Keysyms, XKB levels and compose come from the keyboard module.
+        match self.keyboard.key(&self.surface.c, &e) {
+            keyboard::Key::Submit => {
                 self.submit()?;
                 return Ok(true);
             }
-            "\u{8}" => {
+            keyboard::Key::Erase => {
                 self.input.pop();
             }
-            "\u{1b}" => {
+            keyboard::Key::Clear => {
                 // Escape clears the entry; it never dismisses the lock.
                 self.input.clear();
             }
-            s if s.chars().count() == 1 => {
-                let c = s.chars().next().unwrap();
-                if !c.is_control() && self.input.len() + c.len_utf8() <= 4096 {
-                    self.input.push(c);
+            keyboard::Key::Text(text) => {
+                let text = text.as_str();
+                if self.input.len() + text.len() <= 4096 {
+                    self.input.push_str(text);
                 }
             }
-            _ => {}
+            keyboard::Key::Nothing => {}
         }
         self.draw()?;
         Ok(true)
-    }
-
-    /// Translate a key press into the character it produces.
-    ///
-    /// A keycode has several keysym levels: unshifted, shifted, AltGr and so
-    /// on. Reading only the first level made every capital letter and every
-    /// shifted symbol (on a Swedish layout `@`, `!`, `?`, `#`) impossible to
-    /// type, so a password containing one could never unlock the screen.
-    ///
-    /// Caps Lock is applied separately, as X does: it shifts letters but not
-    /// digits or punctuation.
-    fn keystring(&self, e: KeyPressEvent) -> Result<String> {
-        let map = self.surface.c.get_keyboard_mapping(e.detail, 1)?.reply()?;
-        let syms = &map.keysyms;
-        let shift = e.state.contains(KeyButMask::SHIFT);
-        let lock = e.state.contains(KeyButMask::LOCK);
-        let altgr = e.state.contains(KeyButMask::MOD5);
-        let level = match (shift, altgr) {
-            (false, false) => 0,
-            (true, false) => 1,
-            (false, true) => 2,
-            (true, true) => 3,
-        };
-        let mut sym = syms
-            .get(level)
-            .or_else(|| syms.get(level % 2))
-            .or_else(|| syms.first())
-            .copied()
-            .unwrap_or(0);
-        // XK_ISO_Level3_Shift as a leftover: fall back to the unshifted level.
-        if sym == 0 || sym == 0xfe03 {
-            sym = syms.first().copied().unwrap_or(0);
-        }
-        // Caps Lock swaps the case of alphabetic keysyms only. Latin-1
-        // covers å ä ö and the other Swedish letters; ÷ and × are not letters.
-        if lock {
-            if (0x61..=0x7a).contains(&sym) || ((0xe0..=0xfe).contains(&sym) && sym != 0xf7) {
-                sym -= 0x20;
-            } else if (0x41..=0x5a).contains(&sym) || ((0xc0..=0xde).contains(&sym) && sym != 0xd7)
-            {
-                sym += 0x20;
-            }
-        }
-        Ok(match sym {
-            0xff0d | 0xff8d => "\r".to_string(),
-            0xff08 => "\u{8}".to_string(),
-            0xff1b => "\u{1b}".to_string(),
-            0xff09 => "\t".to_string(),
-            s if (0x20..0x7f).contains(&s) => char::from_u32(s).unwrap_or(' ').to_string(),
-            // Latin-1 keysyms map directly to their code point, which covers
-            // å ä ö and the other Swedish letters.
-            s if (0xa0..0x100).contains(&s) => char::from_u32(s).unwrap_or(' ').to_string(),
-            _ => String::new(),
-        })
     }
 
     fn run(&mut self) -> Result<()> {
@@ -1062,6 +1012,11 @@ impl Lock {
                     Some(event) => Ok(Some(event)),
                     None => self.surface.c.poll_for_event(),
                 };
+                if let Ok(Some(event)) = &event {
+                    if self.keyboard.handle_event(event) {
+                        continue;
+                    }
+                }
                 match event {
                     Ok(Some(Event::KeyPress(e))) => {
                         if let Err(e) = self.handle_key(e) {
