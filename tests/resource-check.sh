@@ -19,10 +19,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 fail() { printf 'FAIL %s\n' "$1"; [ "$MODE" = baseline ] || exit 1; }
 mkdir -p "$TEST/bin" "$TEST/config" "$TEST/state"
-head -c 48 /dev/zero > "$TEST/zero"
-i=0; while [ "$i" -lt 48 ]; do printf '\200'; i=$((i + 1)); done > "$TEST/loud-a"
-i=0; while [ "$i" -lt 48 ]; do printf '\040'; i=$((i + 1)); done > "$TEST/loud-b"
-# Fixture CAVA: raw 8-bit frames at about 30 fps; silence unless $TEST/sound
+# 48 bars of 16 bits each.
+head -c 96 /dev/zero > "$TEST/zero"
+i=0; while [ "$i" -lt 96 ]; do printf '\200'; i=$((i + 1)); done > "$TEST/loud-a"
+i=0; while [ "$i" -lt 96 ]; do printf '\040'; i=$((i + 1)); done > "$TEST/loud-b"
+# Fixture CAVA: raw 16-bit frames at about 30 fps; silence unless $TEST/sound
 # exists, and then alternating levels so the bars keep moving.
 cat > "$TEST/bin/cava" <<HELPER
 #!/bin/sh
@@ -47,9 +48,17 @@ cpu() {
   a=$(ticks "$1"); sleep "$2"; b=$(ticks "$1")
   awk -v a="$a" -v b="$b" -v t="$tck" -v s="$2" 'BEGIN { printf "%.2f", (b - a) * 100 / t / s }'
 }
-# Distinct root images among five shots 200 ms apart.
+# Distinct root images among five shots 200 ms apart. Only the pixels are
+# compared: some xwd builds leave uninitialized bytes in the header.
+pixels() {
+  python3 -I -c 'import hashlib, sys
+d = sys.stdin.buffer.read()
+header = int.from_bytes(d[0:4], "big")
+colours = int.from_bytes(d[76:80], "big")
+print(hashlib.md5(d[header + 12 * colours:]).hexdigest())'
+}
 frames() {
-  for _ in 1 2 3 4 5; do xwd -root -silent | md5sum; sleep 0.2; done | sort -u | wc -l
+  for _ in 1 2 3 4 5; do xwd -root -silent | pixels; sleep 0.2; done | sort -u | wc -l
 }
 touch "$TEST/sound"
 "$BIN" > "$TEST/lock.log" 2>&1 & LOCK=$!
