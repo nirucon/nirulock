@@ -73,13 +73,22 @@ fn later_overlays_cannot_cover_the_lock() {
         .reply()
         .unwrap()
         .atom;
-    let ready = c
-        .get_property(false, root, ready_atom, AtomEnum::WINDOW, 0, 1)
-        .unwrap()
-        .reply()
-        .unwrap()
-        .value32()
-        .and_then(|mut v| v.next());
+    // The window is mapped before the first frame is drawn and readiness
+    // is published, so give the lock a moment.
+    let until = Instant::now() + Duration::from_secs(3);
+    let ready = loop {
+        let ready = c
+            .get_property(false, root, ready_atom, AtomEnum::WINDOW, 0, 1)
+            .unwrap()
+            .reply()
+            .unwrap()
+            .value32()
+            .and_then(|mut v| v.next());
+        if ready.is_some() || Instant::now() >= until {
+            break ready;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
     assert_eq!(ready, Some(lock), "the lock did not publish readiness");
     let overlay = c.generate_id().unwrap();
     c.create_window(
