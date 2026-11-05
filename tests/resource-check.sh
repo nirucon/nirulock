@@ -38,7 +38,7 @@ done
 HELPER
 chmod +x "$TEST/bin/cava"
 export PATH="$TEST/bin:$PATH" DISPLAY=:96 XDG_CONFIG_HOME="$TEST/config" XDG_STATE_HOME="$TEST/state"
-Xvfb :96 -screen 0 1024x768x24 -nolisten tcp > "$TEST/xvfb.log" 2>&1 & XVFB=$!
+Xvfb :96 -screen 0 1024x768x24 -nolisten tcp -noreset > "$TEST/xvfb.log" 2>&1 & XVFB=$!
 sleep 1
 tck=$(getconf CLK_TCK)
 ticks() { awk '{print $14 + $15}' "/proc/$1/stat"; }

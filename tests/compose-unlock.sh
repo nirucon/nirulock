@@ -23,7 +23,7 @@ dir=$(mktemp -d)
 export HOME="$dir" XDG_STATE_HOME="$dir/state" XDG_CONFIG_HOME="$dir/config" DISPLAY="$display"
 export LANG="${LANG:-C.UTF-8}"
 lock=
-Xvfb "$display" -screen 0 1024x768x24 -nolisten tcp >/dev/null 2>&1 &
+Xvfb "$display" -screen 0 1024x768x24 -nolisten tcp -noreset >/dev/null 2>&1 &
 server=$!
 cleanup() {
   [ -z "$lock" ] || kill "$lock" 2>/dev/null
@@ -45,6 +45,8 @@ exited_within() {
 }
 sleep 1.5
 setxkbmap se || fail "setxkbmap se"
+# The fixture must be typed on the Swedish layout, not on remapped keycodes.
+setxkbmap -query | grep -q '^layout: *se$' || fail "the Swedish layout is not active"
 "$binary" > "$dir/lock.log" 2>&1 &
 lock=$!
 sleep 2.5
