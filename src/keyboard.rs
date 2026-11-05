@@ -720,10 +720,29 @@ fn select_xkb_events(c: &RustConnection) -> bool {
 /// digits or punctuation.
 fn core_sym(c: &RustConnection, e: &KeyPressEvent) -> Option<u32> {
     let map = c.get_keyboard_mapping(e.detail, 1).ok()?.reply().ok()?;
-    let syms = &map.keysyms;
-    let shift = e.state.contains(KeyButMask::SHIFT);
-    let lock = e.state.contains(KeyButMask::LOCK);
-    let altgr = e.state.contains(KeyButMask::MOD5);
+    Some(level_sym(&map.keysyms, e.state, KeyButMask::MOD2))
+}
+
+/// Keypad keysyms that NumLock selects: KP_Space..KP_9 and KP_Equal.
+fn is_keypad(sym: u32) -> bool {
+    (0xff80..=0xffbd).contains(&sym)
+}
+
+/// Pick the keysym for a modifier state from one keycode's core keysyms.
+///
+/// NumLock follows the core protocol rule: on a key whose second keysym is
+/// a keypad keysym, NumLock selects the second keysym, and Shift reverses
+/// that choice. Without it `KP_1` arrived as `KP_End` and keypad digits were
+/// dropped.
+fn level_sym(syms: &[u32], state: KeyButMask, numlock: KeyButMask) -> u32 {
+    let shift = state.contains(KeyButMask::SHIFT);
+    let lock = state.contains(KeyButMask::LOCK);
+    let altgr = state.contains(KeyButMask::MOD5);
+    let num = u16::from(numlock) != 0 && state.contains(numlock);
+    if !altgr && num && syms.get(1).copied().is_some_and(is_keypad) {
+        let index = usize::from(num != shift);
+        return syms.get(index).copied().unwrap_or(0);
+    }
     let level = match (shift, altgr) {
         (false, false) => 0,
         (true, false) => 1,
@@ -743,7 +762,7 @@ fn core_sym(c: &RustConnection, e: &KeyPressEvent) -> Option<u32> {
     if lock {
         sym = caps(sym);
     }
-    Some(sym)
+    sym
 }
 
 /// Caps Lock swaps the case of alphabetic Latin-1 keysyms only; ÷ and × are
@@ -859,6 +878,40 @@ mod tests {
         let text = Text::from_c_buffer(&mut buf, 2).unwrap();
         assert_eq!(text.as_str(), "é");
         assert!(buf.iter().all(|b| *b == 0), "the C buffer was not wiped");
+    }
+
+    #[test]
+    fn numlock_selects_keypad_digits() {
+        // Keycode 87 on a pc105 keymap: KP_End, KP_1.
+        let kp1 = [0xff9c, 0xffb1];
+        let num = KeyButMask::MOD2;
+        assert_eq!(level_sym(&kp1, KeyButMask::from(0u16), num), 0xff9c);
+        assert_eq!(level_sym(&kp1, num, num), 0xffb1);
+        // Shift reverses NumLock, as in the core protocol.
+        assert_eq!(level_sym(&kp1, num | KeyButMask::SHIFT, num), 0xff9c);
+        assert_eq!(level_sym(&kp1, KeyButMask::SHIFT, num), 0xffb1);
+        assert_eq!(keysym_char(0xffb1), Some('1'));
+        assert_eq!(keysym_char(0xff9c), None);
+        // NumLock never changes ordinary keys.
+        let a = [u32::from(b'a'), u32::from(b'A')];
+        assert_eq!(level_sym(&a, num, num), u32::from(b'a'));
+    }
+
+    #[test]
+    fn keypad_operators_and_enter_map() {
+        for (sym, c) in [
+            (0xffb0, '0'),
+            (0xffb9, '9'),
+            (0xffae, '.'),
+            (0xffac, ','),
+            (0xffab, '+'),
+            (0xffad, '-'),
+            (0xffaa, '*'),
+            (0xffaf, '/'),
+        ] {
+            assert_eq!(keysym_char(sym), Some(c));
+        }
+        assert_eq!(keysym_char(XK_KP_ENTER), None, "KP_Enter submits instead");
     }
 
     #[test]
