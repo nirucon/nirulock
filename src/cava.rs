@@ -19,7 +19,7 @@
 use crate::{core::Surface, palette::Palette};
 use std::{
     fs,
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::{
         fd::{AsRawFd, RawFd},
         unix::{net::UnixStream, process::CommandExt},
@@ -202,15 +202,14 @@ impl Drop for Visualizer {
 /// bars jump between adjacent frames.
 pub struct Cava {
     visualizer: Option<Visualizer>,
-    shown: Vec<f32>,
+    spectrum: Spectrum,
     last: Instant,
     next_retry: Instant,
-    primed: bool,
     gate: PowerGate,
-    gain: Gain,
     /// Read end of the reader's silence wake-up; the write end is cloned
     /// into each reader thread.
     wake: Option<(UnixStream, UnixStream)>,
+    trace: Option<Trace>,
 }
 
 impl Cava {
@@ -224,13 +223,12 @@ impl Cava {
         let visualizer = Visualizer::start(Self::writer(&wake));
         Self {
             visualizer,
-            shown: vec![0.0; BARS],
+            spectrum: Spectrum::new(),
             last: now,
             next_retry: now + Duration::from_secs(2),
-            primed: false,
             gate: PowerGate::new(),
-            gain: Gain::new(),
             wake,
+            trace: Trace::from_env(),
         }
     }
 
@@ -269,7 +267,6 @@ impl Cava {
             return;
         }
         if on {
-            self.primed = false;
             self.last = Instant::now();
             if self.visualizer.is_none() {
                 self.visualizer = Visualizer::start(Self::writer(&self.wake));
@@ -279,15 +276,16 @@ impl Cava {
             // Drop kills and reaps the child and joins the reader.
             self.visualizer = None;
         }
-        self.shown.iter_mut().for_each(|v| *v = 0.0);
+        self.spectrum.flat();
     }
 
     /// Latest smoothed bar heights in the range 0.0..=1.0. Flat while paused.
     pub fn values(&mut self) -> &[f32] {
         let now = Instant::now();
         if self.gate.activity() == Activity::DisplayOff {
-            self.shown.iter_mut().for_each(|v| *v = 0.0);
-            return &self.shown;
+            self.last = now;
+            self.spectrum.flat();
+            return self.traced(now, 'O');
         }
         self.maintain(now);
         let raw = self
@@ -306,37 +304,27 @@ impl Cava {
                 }
             }
         }
-        if self.gate.activity() == Activity::Silent {
-            self.primed = false;
-            self.shown.iter_mut().for_each(|v| *v = 0.0);
-            return &self.shown;
-        }
         let dt = now
             .saturating_duration_since(self.last)
             .as_secs_f32()
             .clamp(0.0, 0.2);
         self.last = now;
-        let targets = self.gain.targets(&raw, dt);
-        if !raw.is_empty() && !self.primed {
-            for (index, shown) in self.shown.iter_mut().enumerate() {
-                *shown = targets.get(index).copied().unwrap_or(0.0);
-            }
-            self.primed = true;
-            return &self.shown;
+        if self.gate.activity() == Activity::Silent {
+            // The release has already brought every bar down during the
+            // silence window, so this flat frame is not a visible step.
+            self.spectrum.flat();
+            return self.traced(now, 'S');
         }
-        // Same attack/release envelope as NIRUAMP: fast up, slower down, at
-        // the same 30 fps sampling interval.
-        let attack = 1.0 - (-dt / 0.045).exp();
-        let release = 1.0 - (-dt / 0.14).exp();
-        for (index, shown) in self.shown.iter_mut().enumerate() {
-            let target = targets.get(index).copied().unwrap_or(0.0);
-            let factor = if target >= *shown { attack } else { release };
-            *shown += (target - *shown) * factor;
-            if *shown < 0.002 {
-                *shown = 0.0;
-            }
+        self.spectrum.frame(&raw, dt);
+        self.traced(now, 'L')
+    }
+
+    /// The shown bars, written to the `NIRU_CAVA_TRACE` file when set.
+    fn traced(&mut self, now: Instant, state: char) -> &[f32] {
+        if let Some(trace) = self.trace.as_mut() {
+            trace.frame(now, state, self.spectrum.shown());
         }
-        &self.shown
+        self.spectrum.shown()
     }
 
     fn maintain(&mut self, now: Instant) {
@@ -350,6 +338,115 @@ impl Cava {
             self.visualizer = Visualizer::start(Self::writer(&self.wake));
             self.next_retry = now + Duration::from_secs(2);
         }
+    }
+}
+
+/// Optional per-frame record of the shown bar heights, for measuring motion
+/// and frame pacing: `NIRU_CAVA_TRACE=/path` appends one line per frame with
+/// the milliseconds since start, the activity (`L`ive, `S`ilent, display
+/// `O`ff) and the 48 heights. It holds nothing but those numbers.
+struct Trace {
+    out: io::BufWriter<fs::File>,
+    start: Instant,
+}
+
+impl Trace {
+    fn from_env() -> Option<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = std::env::var_os("NIRU_CAVA_TRACE").filter(|p| !p.is_empty())?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)
+            .ok()?;
+        Some(Self {
+            out: io::BufWriter::new(file),
+            start: Instant::now(),
+        })
+    }
+
+    fn frame(&mut self, now: Instant, state: char, shown: &[f32]) {
+        let ms = now.saturating_duration_since(self.start).as_secs_f64() * 1000.0;
+        let mut line = format!("{ms:.3} {state}");
+        for value in shown {
+            line.push_str(&format!(" {value:.4}"));
+        }
+        line.push('\n');
+        let _ = self.out.write_all(line.as_bytes());
+        let _ = self.out.flush();
+    }
+}
+
+/// The shown bar heights: the [`Gain`]-normalized CAVA levels eased with a
+/// fast attack and a slower release. Free of I/O so that it can be tested.
+///
+/// Every change of the shown bars, including the first frame after a
+/// silence pause or a display wake-up, goes through the same easing, so the
+/// bars always rise from where they were instead of snapping to a frame.
+#[derive(Debug)]
+pub struct Spectrum {
+    shown: Vec<f32>,
+    gain: Gain,
+    /// Set by a flat (paused) frame: the next frame eases over one nominal
+    /// frame interval, whatever time passed during the pause.
+    resume: bool,
+}
+
+impl Default for Spectrum {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Spectrum {
+    /// The nominal frame interval (CAVA and the repaint run at 30 fps).
+    pub const FRAME: f32 = 1.0 / 30.0;
+    /// Attack and release time constants, in seconds: the NIRUAMP envelope.
+    const ATTACK: f32 = 0.045;
+    const RELEASE: f32 = 0.14;
+
+    pub fn new() -> Self {
+        Self {
+            shown: vec![0.0; BARS],
+            gain: Gain::new(),
+            resume: true,
+        }
+    }
+
+    pub fn shown(&self) -> &[f32] {
+        &self.shown
+    }
+
+    /// A paused frame: every bar flat. The level reference is kept.
+    pub fn flat(&mut self) -> &[f32] {
+        self.shown.iter_mut().for_each(|v| *v = 0.0);
+        self.resume = true;
+        &self.shown
+    }
+
+    /// Ease towards one raw CAVA frame that arrived `dt` seconds after the
+    /// last one.
+    pub fn frame(&mut self, raw: &[u16], dt: f32) -> &[f32] {
+        let dt = if std::mem::take(&mut self.resume) {
+            Self::FRAME
+        } else {
+            dt
+        };
+        let targets = self.gain.targets(raw, dt);
+        // Same attack/release envelope as NIRUAMP: fast up, slower down, at
+        // the same 30 fps sampling interval.
+        let attack = 1.0 - (-dt / Self::ATTACK).exp();
+        let release = 1.0 - (-dt / Self::RELEASE).exp();
+        for (index, shown) in self.shown.iter_mut().enumerate() {
+            let target = targets.get(index).copied().unwrap_or(0.0);
+            let factor = if target >= *shown { attack } else { release };
+            *shown += (target - *shown) * factor;
+            if *shown < 0.002 {
+                *shown = 0.0;
+            }
+        }
+        &self.shown
     }
 }
 
@@ -371,6 +468,12 @@ fn silent_frame(frame: &[u16]) -> bool {
 /// `autosens` put it (about 85 % before the 0.62 curve), the reference decays slowly
 /// so quiet passages grow, and the gain is capped so that anything below the
 /// noise floor stays flat.
+///
+/// Two details keep the motion continuous. A soft knee above the noise floor
+/// lets a bar grow from zero instead of appearing at a few percent of the
+/// panel. And the reference only decays while there is sound: silence keeps
+/// the level of the last music, and a fresh start uses a typical music
+/// level, so the first frames after a pause are not drawn at full gain.
 #[derive(Debug)]
 pub struct Gain {
     peak: f32,
@@ -385,14 +488,19 @@ impl Default for Gain {
 impl Gain {
     /// The smallest reference, which caps the gain.
     const PEAK_MIN: f32 = 400.0;
+    /// The reference before any sound: a quiet music level, about -24 dB.
+    const PEAK_START: f32 = 4000.0;
     /// Where the loudest recent bar is drawn.
     const HEADROOM: f32 = 0.85;
     /// Time constant of the reference's decay, in seconds.
     const DECAY: f32 = 4.0;
+    /// Width of the soft knee above [`SILENCE_FLOOR`], in raw units: a bar
+    /// reaches its full curve at four times the floor.
+    const KNEE: f32 = 3.0 * SILENCE_FLOOR as f32;
 
     pub fn new() -> Self {
         Self {
-            peak: Self::PEAK_MIN,
+            peak: Self::PEAK_START,
         }
     }
 
@@ -401,20 +509,26 @@ impl Gain {
         let max = raw.iter().copied().max().map(f32::from).unwrap_or(0.0);
         self.peak = if max > self.peak {
             max
+        } else if max < f32::from(SILENCE_FLOOR) {
+            // Silence says nothing about how loud the next sound will be.
+            self.peak
         } else {
             (self.peak * (-dt / Self::DECAY).exp()).max(Self::PEAK_MIN)
         };
-        raw.iter()
-            .map(|value| {
-                if *value < SILENCE_FLOOR {
-                    0.0
-                } else {
-                    (f32::from(*value) * Self::HEADROOM / self.peak)
-                        .min(1.0)
-                        .powf(0.62)
-                }
-            })
-            .collect()
+        raw.iter().map(|value| self.level(*value)).collect()
+    }
+
+    /// One bar: the 0.62 curve of the normalized level, faded in by a
+    /// smoothstep over the knee so it is continuous (and flat) at the floor.
+    fn level(&self, value: u16) -> f32 {
+        if value < SILENCE_FLOOR {
+            return 0.0;
+        }
+        let curve = (f32::from(value) * Self::HEADROOM / self.peak)
+            .min(1.0)
+            .powf(0.62);
+        let knee = (f32::from(value - SILENCE_FLOOR) / Self::KNEE).min(1.0);
+        curve * knee * knee * (3.0 - 2.0 * knee)
     }
 }
 
@@ -810,7 +924,129 @@ mod tests {
             .iter()
             .all(|v| *v == 0.0));
         // The gain is capped: a sound just above the floor stays small.
-        let faint = gain.targets(&[SILENCE_FLOOR, 0, 0], 0.033);
-        assert!(faint[0] > 0.0 && faint[0] < 0.25);
+        let faint = gain.targets(&[SILENCE_FLOOR + 8, 0, 0], 0.033);
+        assert!(faint[0] > 0.0 && faint[0] < 0.05);
+    }
+
+    /// A music frame with a spread of levels, like a real spectrum.
+    fn music() -> Vec<u16> {
+        (0..BARS)
+            .map(|i| (20_000 - i * 400) as u16)
+            .collect::<Vec<_>>()
+    }
+
+    /// Check one rise from flat bars to a steady `target`: every frame is a
+    /// step of at most 55 % of the target, never backwards, and the bars
+    /// settle within a few frames like the 0.17 envelope.
+    fn assert_eased_rise(frames: &[Vec<f32>], target: &[f32]) {
+        let mut previous = vec![0.0; BARS];
+        for (n, frame) in frames.iter().enumerate() {
+            for i in 0..BARS {
+                let step = frame[i] - previous[i];
+                assert!(step >= -1e-6, "frame {n} bar {i} fell during a rise");
+                assert!(
+                    step <= 0.55 * target[i] + 1e-6,
+                    "frame {n} bar {i} jumped {step} of {}",
+                    target[i]
+                );
+            }
+            previous.clone_from(frame);
+        }
+        for i in 0..BARS {
+            assert!((previous[i] - target[i]).abs() <= 0.05 * target[i] + 1e-3);
+        }
+    }
+
+    #[test]
+    fn music_after_a_silence_pause_eases_up_instead_of_snapping() {
+        let mut spectrum = Spectrum::new();
+        for _ in 0..90 {
+            spectrum.frame(&music(), Spectrum::FRAME);
+        }
+        let target = spectrum.shown().to_vec();
+        // The silence window: CAVA's bars fall to nothing, the release
+        // follows them down, then the repaint pauses on a flat frame.
+        for _ in 0..60 {
+            spectrum.frame(&[0; BARS], Spectrum::FRAME);
+        }
+        assert!(spectrum.shown().iter().all(|v| *v == 0.0));
+        spectrum.flat();
+        // Seconds pass while paused; the first frame after the wake-up
+        // still eases over one frame interval.
+        let frames: Vec<Vec<f32>> = (0..6)
+            .map(|n| {
+                let dt = if n == 0 { 0.2 } else { Spectrum::FRAME };
+                spectrum.frame(&music(), dt).to_vec()
+            })
+            .collect();
+        // The 0.17 envelope: 1 - e^(-33/45), about 52 % per frame.
+        let first = 1.0 - (-Spectrum::FRAME / Spectrum::ATTACK).exp();
+        assert!((frames[0][0] - first * target[0]).abs() < 0.01 * target[0]);
+        assert_eased_rise(&frames, &target);
+    }
+
+    #[test]
+    fn the_first_frames_and_a_display_wake_up_ease_too() {
+        let mut spectrum = Spectrum::new();
+        let frames: Vec<Vec<f32>> = (0..6)
+            .map(|_| spectrum.frame(&music(), 0.2).to_vec())
+            .collect();
+        let mut settled = Spectrum::new();
+        for _ in 0..90 {
+            settled.frame(&music(), Spectrum::FRAME);
+        }
+        // Only the first frame is held to one frame interval; a late frame
+        // after that legitimately moves further, so compare the first.
+        assert!(frames[0][0] <= 0.55 * settled.shown()[0]);
+        spectrum.flat();
+        let frames: Vec<Vec<f32>> = (0..6)
+            .map(|_| spectrum.frame(&music(), Spectrum::FRAME).to_vec())
+            .collect();
+        assert_eased_rise(&frames, settled.shown());
+    }
+
+    #[test]
+    fn bars_near_the_floor_are_small_and_grow_continuously_from_zero() {
+        let mut gain = Gain::new();
+        // A long quiet passage drives the gain to its maximum.
+        for _ in 0..30 * 60 {
+            gain.targets(&[SILENCE_FLOOR + 4; BARS], 0.033);
+        }
+        assert_eq!(gain.peak, Gain::PEAK_MIN);
+        assert_eq!(gain.level(SILENCE_FLOOR - 1), 0.0);
+        assert_eq!(gain.level(SILENCE_FLOOR), 0.0);
+        assert!(gain.level(SILENCE_FLOOR + 8) < 0.01);
+        assert!(gain.level(2 * SILENCE_FLOOR) < 0.08);
+        let mut previous = 0.0;
+        for value in SILENCE_FLOOR..=2_000 {
+            let level = gain.level(value);
+            assert!(level >= previous, "not monotonic at {value}");
+            assert!(
+                level - previous < 0.01,
+                "a step of {} at {value}",
+                level - previous
+            );
+            previous = level;
+        }
+        // During music the gain is lower, so the knee only touches bars
+        // below a few percent of the panel.
+        let mut gain = Gain::new();
+        gain.targets(&[20_000], 0.033);
+        assert!(gain.level(4 * SILENCE_FLOOR) < 0.05);
+    }
+
+    #[test]
+    fn silence_keeps_the_level_reference() {
+        let mut gain = Gain::new();
+        assert_eq!(gain.peak, Gain::PEAK_START);
+        gain.targets(&music(), 0.033);
+        assert_eq!(gain.peak, 20_000.0);
+        for _ in 0..30 * 600 {
+            gain.targets(&[0; BARS], 0.033);
+        }
+        assert_eq!(gain.peak, 20_000.0);
+        // Sound decays it as before, so quiet passages still grow.
+        gain.targets(&[2_000], 1.0);
+        assert!(gain.peak < 20_000.0);
     }
 }
