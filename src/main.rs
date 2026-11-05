@@ -539,7 +539,11 @@ impl Lock {
         let dots = "*".repeat(self.input.chars().count());
         let extras = self.status_lines(&pal);
         let step = line.saturating_mul(3) / 2;
-        let password = format!("{label}{dots}");
+        // The active layout next to the prompt when several are configured.
+        let password = match (self.state, self.keyboard.indicator()) {
+            (State::Checking, _) | (_, None) => format!("{label}{dots}"),
+            (_, Some(layout)) => format!("[{layout}] {label}{dots}"),
+        };
         let width = i32::from(area.width);
         let height = i32::from(area.height);
         let left = |offset: i32| {
@@ -1047,7 +1051,11 @@ impl Lock {
                     None => self.surface.c.poll_for_event(),
                 };
                 if let Ok(Some(event)) = &event {
-                    if self.keyboard.handle_event(&self.surface.c, event) {
+                    if let Some(changed) = self.keyboard.handle_event(&self.surface.c, event) {
+                        if let Some(caps) = self.keyboard.caps() {
+                            self.caps = caps;
+                        }
+                        repaint |= changed;
                         continue;
                     }
                     if let Some(power) = self.power.as_mut() {

@@ -24,7 +24,7 @@ use x11rb::{
     connection::Connection,
     protocol::{
         xkb::{self, ConnectionExt as _},
-        xproto::{ConnectionExt as _, GetModifierMappingReply, KeyButMask, KeyPressEvent},
+        xproto::{self, ConnectionExt as _, GetModifierMappingReply, KeyButMask, KeyPressEvent},
         Event,
     },
     rust_connection::RustConnection,
@@ -269,6 +269,7 @@ struct Api {
     state_update_mask: unsafe extern "C" fn(Ptr, u32, u32, u32, u32, u32, u32) -> c_int,
     state_key_get_one_sym: unsafe extern "C" fn(Ptr, u32) -> u32,
     state_key_get_utf8: unsafe extern "C" fn(Ptr, u32, *mut c_char, usize) -> c_int,
+    state_serialize_layout: unsafe extern "C" fn(Ptr, c_int) -> u32,
     compose_table_unref: unsafe extern "C" fn(Ptr),
     compose_state_new: unsafe extern "C" fn(Ptr, c_int) -> Ptr,
     compose_state_unref: unsafe extern "C" fn(Ptr),
@@ -281,6 +282,7 @@ struct Api {
     xcb_disconnect: unsafe extern "C" fn(Ptr),
 }
 
+const XKB_STATE_LAYOUT_EFFECTIVE: c_int = 1 << 7;
 const XKB_COMPOSE_FEED_ACCEPTED: c_int = 1;
 const XKB_COMPOSE_COMPOSING: c_int = 1;
 const XKB_COMPOSE_COMPOSED: c_int = 2;
@@ -366,6 +368,7 @@ impl Xkb {
             state_update_mask: load!(common, b"xkb_state_update_mask\0"),
             state_key_get_one_sym: load!(common, b"xkb_state_key_get_one_sym\0"),
             state_key_get_utf8: load!(common, b"xkb_state_key_get_utf8\0"),
+            state_serialize_layout: load!(common, b"xkb_state_serialize_layout\0"),
             compose_table_unref: load!(common, b"xkb_compose_table_unref\0"),
             compose_state_new: load!(common, b"xkb_compose_state_new\0"),
             compose_state_unref: load!(common, b"xkb_compose_state_unref\0"),
@@ -478,6 +481,11 @@ impl Xkb {
         }
     }
 
+    fn layout(&self) -> u32 {
+        // SAFETY: a valid state.
+        unsafe { (self.api.state_serialize_layout)(self.state, XKB_STATE_LAYOUT_EFFECTIVE) }
+    }
+
     fn reset_compose(&mut self) {
         if !self.compose.is_null() {
             // SAFETY: a valid compose state.
@@ -576,6 +584,12 @@ pub struct Keyboard {
     xkb: Option<Xkb>,
     /// Only loaded when libxkbcommon is not available.
     core: Option<CoreMap>,
+    /// The effective XKB group, from XKB state events.
+    group: u8,
+    /// Caps Lock from XKB state events, when they are available.
+    caps: Option<bool>,
+    /// Short layout names (`SE`, `US`) from `_XKB_RULES_NAMES`.
+    layouts: Vec<String>,
     builtin: BuiltinCompose,
 }
 
@@ -588,11 +602,42 @@ impl Keyboard {
         } else {
             None
         };
+        let state = if events {
+            c.xkb_get_state(xkb::ID::USE_CORE_KBD.into())
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+        } else {
+            None
+        };
         Self {
             xkb,
             core,
             builtin: BuiltinCompose::default(),
+            group: state.as_ref().map(|s| u8::from(s.group)).unwrap_or(0),
+            caps: state
+                .as_ref()
+                .map(|s| u16::from(s.mods) & u16::from(xproto::ModMask::LOCK) != 0),
+            layouts: layout_names(c),
         }
+    }
+
+    /// The active layout's short name, only when more than one is configured:
+    /// a password typed in the wrong group is the most common wrong password.
+    pub fn indicator(&self) -> Option<&str> {
+        if self.layouts.len() < 2 {
+            return None;
+        }
+        let group = self
+            .xkb
+            .as_ref()
+            .map(|xkb| xkb.layout())
+            .unwrap_or(u32::from(self.group));
+        self.layouts.get(group as usize).map(String::as_str)
+    }
+
+    /// Caps Lock as XKB last reported it.
+    pub fn caps(&self) -> Option<bool> {
+        self.caps
     }
 
     /// Whether libxkbcommon is in use; for the diagnostic log only.
@@ -604,22 +649,24 @@ impl Keyboard {
         }
     }
 
-    /// Keep the keymap and modifier state current. Returns true when the
-    /// event was a keyboard event.
-    pub fn handle_event(&mut self, c: &RustConnection, event: &Event) -> bool {
+    /// Keep the keymap and modifier state current. `None` for events that
+    /// are not keyboard events; otherwise whether the indicators changed.
+    pub fn handle_event(&mut self, c: &RustConnection, event: &Event) -> Option<bool> {
+        let before = (self.indicator().map(str::to_string), self.caps);
         match event {
             Event::XkbStateNotify(e) => {
+                self.group = u8::from(e.group);
+                self.caps = Some(u16::from(e.mods) & u16::from(xproto::ModMask::LOCK) != 0);
                 if let Some(xkb) = self.xkb.as_mut() {
                     xkb.update(e);
                 }
-                true
             }
             Event::XkbMapNotify(_) | Event::XkbNewKeyboardNotify(_) => {
                 if let Some(xkb) = self.xkb.as_mut() {
                     // A failed reload keeps the previous keymap.
                     xkb.reload();
                 }
-                true
+                self.layouts = layout_names(c);
             }
             Event::MappingNotify(_) => {
                 if self.xkb.is_none() {
@@ -628,10 +675,10 @@ impl Keyboard {
                         self.core = Some(core);
                     }
                 }
-                true
             }
-            _ => false,
+            _ => return None,
         }
+        Some(before != (self.indicator().map(str::to_string), self.caps))
     }
 
     pub fn reset(&mut self) {
@@ -694,6 +741,45 @@ impl Keyboard {
             },
         }
     }
+}
+
+/// Short layout names from the root window's `_XKB_RULES_NAMES`
+/// (rules, model, layout, variant, options), for example `se,us`.
+fn layout_names(c: &RustConnection) -> Vec<String> {
+    let Some(atom) = c
+        .intern_atom(true, b"_XKB_RULES_NAMES")
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.atom)
+        .filter(|atom| *atom != x11rb::NONE)
+    else {
+        return Vec::new();
+    };
+    let root = c.setup().roots.first().map(|screen| screen.root);
+    root.and_then(|root| {
+        c.get_property(false, root, atom, xproto::AtomEnum::STRING, 0, 1024)
+            .ok()?
+            .reply()
+            .ok()
+    })
+    .map(|reply| parse_layouts(&reply.value))
+    .unwrap_or_default()
+}
+
+fn parse_layouts(value: &[u8]) -> Vec<String> {
+    let Some(field) = value.split(|b| *b == 0).nth(2) else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(field)
+        .split(',')
+        .map(|name| {
+            name.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .take(8)
+                .collect::<String>()
+                .to_ascii_uppercase()
+        })
+        .collect()
 }
 
 fn text_key(text: Option<Text>) -> Key {
@@ -1022,6 +1108,16 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(core.sym(&e), 0xffb1);
+    }
+
+    #[test]
+    fn layout_names_come_from_the_rules_property() {
+        assert_eq!(
+            parse_layouts(b"evdev\0pc105\0se,us\0\0grp:alt_shift_toggle\0"),
+            ["SE", "US"]
+        );
+        assert_eq!(parse_layouts(b"evdev\0pc105\0se\0\0\0"), ["SE"]);
+        assert!(parse_layouts(b"evdev\0").is_empty());
     }
 
     #[test]
