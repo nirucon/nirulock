@@ -1,7 +1,8 @@
 //! Optional CAVA spectrum for the idle and lock screens.
 //!
 //! CAVA is started as a child process with a temporary config that emits raw
-//! 8-bit mono bars on stdout. The rendering is done here, in the same 24/32-bit
+//! 16-bit mono bars on stdout at a fixed sensitivity; the level normalization
+//! CAVA's `autosens` would do happens here, with a noise floor (see [`Gain`]). The rendering is done here, in the same 24/32-bit
 //! pixel format as the text renderer, so the bars follow the active NIRUX theme
 //! without requiring a compositor or a second window.
 //!
@@ -47,13 +48,15 @@ const CAVA_CONFIG: &str = "\
 [general]\n\
 bars = 48\n\
 framerate = 30\n\
+autosens = 0\n\
+sensitivity = 100\n\
 sleep_timer = 2\n\
 \n\
 [output]\n\
 method = raw\n\
 raw_target = /dev/stdout\n\
 data_format = binary\n\
-bit_format = 8bit\n\
+bit_format = 16bit\n\
 channels = mono\n\
 \n\
 [smoothing]\n\
@@ -62,7 +65,7 @@ noise_reduction = 77\n";
 /// A running CAVA child and the latest complete frame it produced.
 struct Visualizer {
     child: Child,
-    bars: Arc<Mutex<Vec<u8>>>,
+    bars: Arc<Mutex<Vec<u16>>>,
     stop: Arc<AtomicBool>,
     /// Set while the caller has stopped repainting for silence; the reader
     /// then signals `wake` on the first non-silent frame.
@@ -120,16 +123,28 @@ impl Visualizer {
         let thread_stop = Arc::clone(&stop);
         let thread_quiet = Arc::clone(&quiet);
         let mut wake = wake;
+        let config = path.clone();
         let reader = thread::Builder::new()
             .name("niru-cava-reader".into())
             .spawn(move || {
-                let mut frame = [0u8; BARS];
+                let mut bytes = [0u8; BARS * 2];
+                let mut frame = [0u16; BARS];
+                let mut config = Some(config);
                 loop {
                     if thread_stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    if stdout.read_exact(&mut frame).is_err() {
+                    if stdout.read_exact(&mut bytes).is_err() {
                         break;
+                    }
+                    // CAVA has read its config once it produces a frame; remove
+                    // it now, so not even a killed lock leaves it behind.
+                    if let Some(config) = config.take() {
+                        let _ = fs::remove_file(config);
+                    }
+                    // CAVA writes 16-bit values in native byte order.
+                    for (value, pair) in frame.iter_mut().zip(bytes.chunks_exact(2)) {
+                        *value = u16::from_ne_bytes([pair[0], pair[1]]);
                     }
                     if let Ok(mut guard) = thread_bars.lock() {
                         guard.clear();
@@ -163,7 +178,7 @@ impl Visualizer {
         !self.stop.load(Ordering::Relaxed) && matches!(self.child.try_wait(), Ok(None))
     }
 
-    fn bars(&self) -> Vec<u8> {
+    fn bars(&self) -> Vec<u16> {
         self.bars
             .lock()
             .map(|guard| guard.clone())
@@ -192,6 +207,7 @@ pub struct Cava {
     next_retry: Instant,
     primed: bool,
     gate: PowerGate,
+    gain: Gain,
     /// Read end of the reader's silence wake-up; the write end is cloned
     /// into each reader thread.
     wake: Option<(UnixStream, UnixStream)>,
@@ -213,6 +229,7 @@ impl Cava {
             next_retry: now + Duration::from_secs(2),
             primed: false,
             gate: PowerGate::new(),
+            gain: Gain::new(),
             wake,
         }
     }
@@ -299,12 +316,10 @@ impl Cava {
             .as_secs_f32()
             .clamp(0.0, 0.2);
         self.last = now;
+        let targets = self.gain.targets(&raw, dt);
         if !raw.is_empty() && !self.primed {
             for (index, shown) in self.shown.iter_mut().enumerate() {
-                *shown = raw
-                    .get(index)
-                    .map(|value| (f32::from(*value) / 255.0).powf(0.62))
-                    .unwrap_or(0.0);
+                *shown = targets.get(index).copied().unwrap_or(0.0);
             }
             self.primed = true;
             return &self.shown;
@@ -314,10 +329,7 @@ impl Cava {
         let attack = 1.0 - (-dt / 0.045).exp();
         let release = 1.0 - (-dt / 0.14).exp();
         for (index, shown) in self.shown.iter_mut().enumerate() {
-            let target = raw
-                .get(index)
-                .map(|value| (f32::from(*value) / 255.0).powf(0.62))
-                .unwrap_or(0.0);
+            let target = targets.get(index).copied().unwrap_or(0.0);
             let factor = if target >= *shown { attack } else { release };
             *shown += (target - *shown) * factor;
             if *shown < 0.002 {
@@ -341,9 +353,69 @@ impl Cava {
     }
 }
 
-/// A frame with every bar at (or within one step of) zero.
-fn silent_frame(frame: &[u8]) -> bool {
-    frame.iter().all(|value| *value <= 1)
+/// Raw 16-bit bars below this are noise, not sound (about -66 dB). An idle
+/// stream measured 4 at most; quiet music is in the hundreds.
+const SILENCE_FLOOR: u16 = 32;
+
+/// A frame with every bar below the noise floor.
+fn silent_frame(frame: &[u16]) -> bool {
+    frame.iter().all(|value| *value < SILENCE_FLOOR)
+}
+
+/// Level normalization in place of CAVA's `autosens`.
+///
+/// With `autosens` CAVA raises its gain without limit during silence until
+/// the noise of an idle stream fills the panel, so "no audio" looked like
+/// sound and the spectrum never paused. CAVA now runs at a fixed sensitivity
+/// and this scales the bars instead: the loudest recent bar is shown where
+/// `autosens` put it (about 85 % before the 0.62 curve), the reference decays slowly
+/// so quiet passages grow, and the gain is capped so that anything below the
+/// noise floor stays flat.
+#[derive(Debug)]
+pub struct Gain {
+    peak: f32,
+}
+
+impl Default for Gain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Gain {
+    /// The smallest reference, which caps the gain.
+    const PEAK_MIN: f32 = 400.0;
+    /// Where the loudest recent bar is drawn.
+    const HEADROOM: f32 = 0.85;
+    /// Time constant of the reference's decay, in seconds.
+    const DECAY: f32 = 4.0;
+
+    pub fn new() -> Self {
+        Self {
+            peak: Self::PEAK_MIN,
+        }
+    }
+
+    /// Bar heights in 0.0..=1.0 for one raw frame, `dt` seconds after the last.
+    pub fn targets(&mut self, raw: &[u16], dt: f32) -> Vec<f32> {
+        let max = raw.iter().copied().max().map(f32::from).unwrap_or(0.0);
+        self.peak = if max > self.peak {
+            max
+        } else {
+            (self.peak * (-dt / Self::DECAY).exp()).max(Self::PEAK_MIN)
+        };
+        raw.iter()
+            .map(|value| {
+                if *value < SILENCE_FLOOR {
+                    0.0
+                } else {
+                    (f32::from(*value) * Self::HEADROOM / self.peak)
+                        .min(1.0)
+                        .powf(0.62)
+                }
+            })
+            .collect()
+    }
 }
 
 /// How long every bar must stay silent before the repaint stops.
@@ -707,12 +779,38 @@ mod tests {
     }
 
     #[test]
-    fn silent_frames_allow_one_step_of_noise() {
+    fn silent_frames_allow_noise_below_the_floor() {
         assert!(silent_frame(&[0; BARS]));
-        assert!(silent_frame(&[1; BARS]));
+        assert!(silent_frame(&[SILENCE_FLOOR - 1; BARS]));
         assert!(silent_frame(&[]));
-        let mut frame = [0u8; BARS];
-        frame[7] = 9;
+        let mut frame = [0u16; BARS];
+        frame[7] = 180;
         assert!(!silent_frame(&frame));
+    }
+
+    #[test]
+    fn gain_normalizes_like_autosens_but_keeps_noise_flat() {
+        let mut gain = Gain::new();
+        // Loud and quiet music end up at the same height once settled.
+        let loud = gain.targets(&[20_000, 2_000, 0], 0.033);
+        assert!((loud[0] - Gain::HEADROOM.powf(0.62)).abs() < 1e-4);
+        assert!(loud[1] > 0.0 && loud[1] < loud[0]);
+        assert_eq!(loud[2], 0.0);
+        for _ in 0..30 * 60 {
+            gain.targets(&[2_000, 200, 0], 0.033);
+        }
+        let quiet = gain.targets(&[2_000, 200, 0], 0.033);
+        assert!((quiet[0] - Gain::HEADROOM.powf(0.62)).abs() < 1e-3);
+        // Noise never grows into bars, however long it lasts.
+        for _ in 0..30 * 120 {
+            gain.targets(&[4, 9, SILENCE_FLOOR - 1], 0.033);
+        }
+        assert!(gain
+            .targets(&[4, 9, SILENCE_FLOOR - 1], 0.033)
+            .iter()
+            .all(|v| *v == 0.0));
+        // The gain is capped: a sound just above the floor stays small.
+        let faint = gain.targets(&[SILENCE_FLOOR, 0, 0], 0.033);
+        assert!(faint[0] > 0.0 && faint[0] < 0.25);
     }
 }
