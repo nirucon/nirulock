@@ -14,15 +14,19 @@
 //! system (it is a dependency of login and sudo).
 //!
 //! The conversation callback answers `PAM_PROMPT_ECHO_OFF` with the password
-//! and aborts on anything else. Failing closed is deliberate: an unexpected
-//! prompt must never unlock the screen.
+//! and aborts on any other prompt. Failing closed is deliberate: an unexpected
+//! prompt must never unlock the screen. `PAM_ERROR_MSG` and `PAM_TEXT_INFO`
+//! need no answer; their text is kept (sanitized, one line, at most 120
+//! characters, never logged) so the prompt can show why an attempt failed,
+//! for example `pam_faillock`'s "The account is locked due to 3 failed
+//! logins." That is also why `pam_authenticate` is no longer called with
+//! `PAM_SILENT`: modules such as pam_faillock stay quiet under it.
 
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::sync::Mutex;
 use zeroize::Zeroize;
 
 const PAM_SUCCESS: c_int = 0;
-const PAM_SILENT: c_int = 0x8000;
 const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_ERROR_MSG: c_int = 3;
 const PAM_TEXT_INFO: c_int = 4;
@@ -76,6 +80,65 @@ static PAM_LOCK: Mutex<()> = Mutex::new(());
 /// zeroizing buffer, so no process-wide copy exists.
 struct Conversation<'a> {
     password: &'a [u8],
+    /// Error and information texts of this attempt, sanitized.
+    message: Option<String>,
+}
+
+/// The longest PAM message shown, in characters.
+pub const MESSAGE_MAX: usize = 120;
+
+/// One printable line of at most [`MESSAGE_MAX`] characters, or nothing.
+///
+/// Control characters, line breaks and invisible formatting characters
+/// (bidirectional overrides, zero-width characters) become single spaces.
+pub fn sanitize(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let mut out = String::new();
+    let mut count = 0;
+    let mut gap = false;
+    for c in text.chars() {
+        let invisible = matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+        if c.is_control() || c.is_whitespace() || invisible {
+            gap = count > 0;
+            continue;
+        }
+        if gap {
+            if count + 1 >= MESSAGE_MAX {
+                break;
+            }
+            out.push(' ');
+            count += 1;
+            gap = false;
+        }
+        out.push(c);
+        count += 1;
+        if count >= MESSAGE_MAX {
+            break;
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Keep `text` after the messages already received in this attempt.
+fn remember(data: &mut Conversation, text: *const c_char) {
+    if text.is_null() {
+        return;
+    }
+    // SAFETY: PAM passes NUL-terminated message strings.
+    let raw = unsafe { std::ffi::CStr::from_ptr(text) }.to_bytes();
+    let joined = match (data.message.take(), sanitize(raw)) {
+        (Some(old), Some(new)) => sanitize(format!("{old} {new}").as_bytes()),
+        (old, new) => new.or(old),
+    };
+    data.message = joined;
+}
+
+/// The result of one attempt.
+pub struct Outcome {
+    /// True only for `PAM_SUCCESS`.
+    pub accepted: bool,
+    /// What PAM said during the attempt, if anything.
+    pub message: Option<String>,
 }
 
 /// A `malloc`ed, NUL-terminated copy of `bytes` for a PAM response.
@@ -126,7 +189,7 @@ unsafe extern "C" fn conversation(
     if num_msg <= 0 || msg.is_null() || resp.is_null() {
         return PAM_CONV_ERR;
     }
-    let data = (appdata as *mut Conversation).as_mut();
+    let mut data = (appdata as *mut Conversation).as_mut();
     let n = num_msg as usize;
     // calloc: every response starts as a null pointer with return code 0.
     let out = libc::calloc(n, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
@@ -147,7 +210,12 @@ unsafe extern "C" fn conversation(
                 };
                 (*out.add(i)).resp = copy;
             }
-            PAM_ERROR_MSG | PAM_TEXT_INFO => { /* no reply needed */ }
+            PAM_ERROR_MSG | PAM_TEXT_INFO => {
+                // No reply needed; keep the text to show it.
+                if let Some(data) = data.as_deref_mut() {
+                    remember(data, (*m).msg);
+                }
+            }
             _ => {
                 discard(out, n);
                 return PAM_CONV_ERR;
@@ -199,12 +267,13 @@ pub fn user_for(uid: libc::uid_t) -> Result<String, String> {
 }
 
 /// Verify `password` for `user`. Only `PAM_SUCCESS` is a success.
-pub fn authenticate(user: &str, password: &str) -> Result<bool, String> {
+pub fn authenticate(user: &str, password: &str) -> Result<Outcome, String> {
     // One authentication at a time.
     let _guard = PAM_LOCK.lock().map_err(|_| "PAM state poisoned")?;
     let cuser = CString::new(user).map_err(|_| "invalid user name")?;
     let mut data = Conversation {
         password: password.as_bytes(),
+        message: None,
     };
     let conv = PamConv {
         conv: Some(conversation),
@@ -230,11 +299,14 @@ pub fn authenticate(user: &str, password: &str) -> Result<bool, String> {
         return Err(format!("PAM could not start (error {rc})"));
     }
     // `data` and `conv` outlive pam_end, the last call that may converse.
-    let auth = unsafe { pam_authenticate(handle, PAM_SILENT) };
+    let auth = unsafe { pam_authenticate(handle, 0) };
     unsafe {
         pam_end(handle, auth);
     }
-    Ok(auth == PAM_SUCCESS)
+    Ok(Outcome {
+        accepted: auth == PAM_SUCCESS,
+        message: data.message.take(),
+    })
 }
 
 #[cfg(test)]
@@ -263,8 +335,8 @@ mod tests {
     fn wrong_password_never_authenticates() {
         // The contract: a wrong password must not unlock, and a missing PAM
         // must be an error rather than a success.
-        if let Ok(ok) = authenticate("nirulock-no-such-user", "definitely-wrong") {
-            assert!(!ok);
+        if let Ok(outcome) = authenticate("nirulock-no-such-user", "definitely-wrong") {
+            assert!(!outcome.accepted);
         }
     }
 
@@ -292,6 +364,7 @@ mod tests {
         let mut out: *mut PamResponse = std::ptr::null_mut();
         let mut data = Conversation {
             password: b"fixture",
+            message: None,
         };
         let rc = unsafe {
             conversation(
@@ -309,6 +382,61 @@ mod tests {
         // Without conversation data there is no password to give: fail.
         let rc = unsafe { conversation(1, msgs.as_mut_ptr(), &mut out, std::ptr::null_mut()) };
         assert_ne!(rc, PAM_SUCCESS);
+    }
+
+    #[test]
+    fn messages_are_captured_and_sanitized() {
+        let error = PamMessage {
+            msg_style: PAM_ERROR_MSG,
+            msg: b"The account is locked due to 3 failed logins.\0".as_ptr() as *const c_char,
+        };
+        let info = PamMessage {
+            msg_style: PAM_TEXT_INFO,
+            msg: b"(10 minutes\nleft to unlock)\0".as_ptr() as *const c_char,
+        };
+        let prompt = PamMessage {
+            msg_style: PAM_PROMPT_ECHO_OFF,
+            msg: b"Password: \0".as_ptr() as *const c_char,
+        };
+        let mut data = Conversation {
+            password: b"fixture",
+            message: None,
+        };
+        let appdata = &mut data as *mut Conversation as *mut c_void;
+        for m in [&error, &info, &prompt] {
+            let mut msgs = [m as *const PamMessage];
+            let mut out: *mut PamResponse = std::ptr::null_mut();
+            let rc = unsafe { conversation(1, msgs.as_mut_ptr(), &mut out, appdata) };
+            assert_eq!(rc, PAM_SUCCESS);
+            unsafe { discard(out, 1) };
+        }
+        assert_eq!(
+            data.message.as_deref(),
+            Some("The account is locked due to 3 failed logins. (10 minutes left to unlock)")
+        );
+        // A prompt is never mistaken for a message.
+        assert!(!data.message.unwrap().contains("Password"));
+    }
+
+    #[test]
+    fn sanitizing_gives_one_short_printable_line() {
+        assert_eq!(
+            sanitize(b"  a\tb\r\n\x1b[31mc  ").as_deref(),
+            Some("a b [31mc")
+        );
+        assert_eq!(
+            sanitize("x\u{202e}y\u{200b}z".as_bytes()).as_deref(),
+            Some("x y z")
+        );
+        assert_eq!(sanitize(b"\n\t "), None);
+        assert_eq!(
+            sanitize(b"\xff\xfeok").as_deref(),
+            Some("\u{fffd}\u{fffd}ok")
+        );
+        let long = "word ".repeat(100);
+        let short = sanitize(long.as_bytes()).unwrap();
+        assert!(short.chars().count() <= MESSAGE_MAX);
+        assert!(!short.ends_with(' '));
     }
 
     #[test]

@@ -22,12 +22,15 @@ fn main() {
         password.pop();
     }
     match pam::authenticate(&user, &password) {
-        Ok(true) => {
+        Ok(outcome) if outcome.accepted => {
             println!("AUTH OK");
             std::process::exit(0)
         }
-        Ok(false) => {
-            println!("REJECTED");
+        Ok(outcome) => {
+            match outcome.message {
+                Some(message) => println!("REJECTED: {message}"),
+                None => println!("REJECTED"),
+            }
             std::process::exit(1)
         }
         Err(e) => {

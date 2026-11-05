@@ -76,7 +76,7 @@ enum State {
 }
 
 struct Authentication {
-    result: mpsc::Receiver<std::result::Result<bool, String>>,
+    result: mpsc::Receiver<std::result::Result<pam::Outcome, String>>,
     wake: UnixStream,
     worker: std::thread::JoinHandle<()>,
 }
@@ -128,6 +128,8 @@ struct Lock {
     caps: bool,
     keyboard: keyboard::Keyboard,
     user: String,
+    /// What PAM said during the last failed attempt (sanitized, never logged).
+    pam_message: Option<String>,
 }
 
 impl Drop for Lock {
@@ -203,6 +205,7 @@ impl Lock {
             caps,
             keyboard,
             user,
+            pam_message: None,
         };
         lock.trace("starting");
         lock.trace(&format!("keyboard: {}", lock.keyboard.backend()));
@@ -534,6 +537,8 @@ impl Lock {
             State::Wrong => (self.message.clone(), pal.focus),
         };
         let dots = "*".repeat(self.input.chars().count());
+        let extras = self.status_lines(&pal);
+        let step = line.saturating_mul(3) / 2;
         let password = format!("{label}{dots}");
         let width = i32::from(area.width);
         let height = i32::from(area.height);
@@ -599,13 +604,13 @@ impl Lock {
                     &password,
                     colour,
                 )?;
-                if self.caps {
+                for (index, (text, fg)) in extras.iter().enumerate() {
                     draw(
                         &mut self.renderer,
                         &mut self.surface,
-                        mid + line * 6,
-                        "Caps Lock",
-                        pal.focus,
+                        (mid + line * 6).saturating_add(step.saturating_mul(index as i16)),
+                        text,
+                        *fg,
                     )?;
                 }
             }
@@ -668,16 +673,16 @@ impl Lock {
                     colour,
                     pal.background,
                 )?;
-                if self.caps {
+                for (index, (text, fg)) in extras.iter().enumerate() {
                     self.renderer.draw_left(
                         &self.surface.c,
                         self.surface.gc,
                         self.surface.back,
                         self.surface.depth,
                         x,
-                        line_at(9),
-                        "Caps Lock",
-                        pal.focus,
+                        line_at(9 + index as i32),
+                        text,
+                        *fg,
                         pal.background,
                     )?;
                 }
@@ -731,13 +736,13 @@ impl Lock {
                     &password,
                     colour,
                 )?;
-                if self.caps {
+                for (index, (text, fg)) in extras.iter().enumerate() {
                     draw(
                         &mut self.renderer,
                         &mut self.surface,
-                        mid + line * 6,
-                        "Caps Lock",
-                        pal.focus,
+                        (mid + line * 6).saturating_add(step.saturating_mul(index as i16)),
+                        text,
+                        *fg,
                     )?;
                 }
             }
@@ -796,13 +801,13 @@ impl Lock {
                     &password,
                     colour,
                 )?;
-                if self.caps {
+                for (index, (text, fg)) in extras.iter().enumerate() {
                     draw(
                         &mut self.renderer,
                         &mut self.surface,
-                        mid + line * 4,
-                        "Caps Lock",
-                        pal.focus,
+                        (mid + line * 4).saturating_add(step.saturating_mul(index as i16)),
+                        text,
+                        *fg,
                     )?;
                 }
             }
@@ -863,19 +868,34 @@ impl Lock {
                     &core::away_text(away),
                     pal.border.max(pal.focus),
                 )?;
-                if self.caps {
+                for (index, (text, fg)) in extras.iter().enumerate() {
                     draw(
                         &mut self.renderer,
                         &mut self.surface,
-                        below + line * 6,
-                        "Caps Lock",
-                        pal.focus,
+                        (below + line * 6).saturating_add(step.saturating_mul(index as i16)),
+                        text,
+                        *fg,
                     )?;
                 }
             }
         }
         self.surface.present()?;
         Ok(())
+    }
+
+    /// Lines under the prompt: why the last attempt failed, then the
+    /// keyboard indicators.
+    fn status_lines(&self, pal: &palette::Palette) -> Vec<(String, u32)> {
+        let mut lines = Vec::new();
+        if self.state != State::Checking {
+            if let Some(message) = self.pam_message.as_ref() {
+                lines.push((message.clone(), pal.muted));
+            }
+        }
+        if self.caps {
+            lines.push(("Caps Lock".to_string(), pal.focus));
+        }
+        lines
     }
 
     /// Repaint only the CAVA panel between full frames. The clock, prompt and
@@ -912,6 +932,7 @@ impl Lock {
             Ok(worker) => {
                 self.authentication = Some(worker);
                 self.state = State::Checking;
+                self.pam_message = None;
             }
             Err(_) => {
                 self.state = State::Wrong;
@@ -936,7 +957,7 @@ impl Lock {
             let _ = authentication.worker.join();
         }
         match outcome {
-            Ok(true) => {
+            Ok(outcome) if outcome.accepted => {
                 self.trace("password accepted");
                 // Accepted: give the keyboard back, then release the grabs so
                 // the session can continue.
@@ -954,14 +975,17 @@ impl Lock {
                 self.trace("password accepted, idle clock told");
                 std::process::exit(0);
             }
-            Ok(false) => {
+            Ok(outcome) => {
                 self.state = State::Wrong;
                 self.message = "wrong password".to_string();
+                // Shown under the prompt, for example pam_faillock's lockout.
+                self.pam_message = outcome.message;
                 secret::clear(&mut self.input);
             }
             Err(e) => {
                 self.state = State::Wrong;
                 self.message = format!("cannot verify: {e}");
+                self.pam_message = None;
                 secret::clear(&mut self.input);
             }
         }
