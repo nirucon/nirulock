@@ -8,6 +8,12 @@
 //! The code is duplicated deliberately: each repository builds on its own with
 //! no private dependency, which keeps installation simple. Lock-specific coverage
 //! and resource handling are maintained here independently of the saver.
+//!
+//! Shared with NIRUSCREENSAVER, file for file: `core.rs`, `cava.rs`,
+//! `palette.rs` and most of `config.rs`. They have diverged (the compositor
+//! opacity hint exists only here). `cava.rs` is kept self-contained, DPMS
+//! watch and silence pause included, so NIRUSCREENSAVER can copy it
+//! verbatim; it depends only on `Surface` and `Palette` from these files.
 
 use ab_glyph::{Font, ScaleFont};
 use x11rb::{
