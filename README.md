@@ -61,7 +61,9 @@ disabled. The spectrum pauses whenever it cannot be seen or has nothing to
 show: with the display off (DPMS standby, suspend or off) CAVA is stopped and
 restarted as soon as the display is on, and after two seconds of silence the
 repaint stops on a flat frame until the first sound. A locked machine with no
-audio then only wakes for the minute clock. Bars follow the active
+audio then only wakes for the minute clock. When sound returns, the bars rise
+from the flat frame with the normal attack instead of jumping to the first
+sample, and quiet sounds just above the noise floor grow from zero. Bars follow the active
 NIRUX theme's focus colour and lighter peak. Set `visualizer = false` to
 keep the cava composition without the spectrum. If CAVA is not installed, the
 lock still works and simply omits the bars; the password prompt never moves
@@ -115,6 +117,10 @@ cargo test
 sh tests/installer.sh
 sh tests/resource-check.sh target/release/nirulock
 ```
+
+`NIRU_CAVA_TRACE=/path/to/file` appends one line per spectrum frame (the
+milliseconds since start, `L`ive, `S`ilent or display `O`ff, and the 48 bar
+heights) for measuring motion and frame pacing; it records nothing else.
 
 `tests/compose-unlock.sh` types a password with dead keys and keypad digits in
 its own Xvfb; run it as a disposable test account whose password is the
