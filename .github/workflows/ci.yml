@@ -20,7 +20,7 @@ jobs:
       # real X server against real PAM.
       - name: Lock behaviour in a real X session
         run: |
-          sudo apt-get install -y xvfb x11-utils x11-apps x11-xserver-utils xdotool fonts-dejavu-core procps libpam-modules passwd util-linux
+          sudo apt-get install -y xvfb x11-utils x11-apps x11-xserver-utils x11-xkb-utils xkb-data xdotool fonts-dejavu-core procps libpam-modules passwd util-linux libxkbcommon0 libxkbcommon-x11-0 libxcb1
           cargo build --release --locked
           sudo install -m 644 pam/debian/nirulock /etc/pam.d/nirulock
           sudo useradd -m -s /bin/sh tester || true
@@ -44,12 +44,50 @@ jobs:
           kill -0 $L 2>/dev/null && { echo "FAIL correct password did not unlock"; cat lock.log; exit 1; } || echo "OK   correct password unlocks"
           INNER
           sudo -u tester sh /tmp/lock-test.sh
+      # K1/K2: dead keys, compose and keypad digits with real key events on
+      # the Swedish layout, against the nirulock PAM service and a test
+      # account whose password needs them.
+      - name: Dead keys, compose and keypad digits unlock through PAM
+        run: |
+          sudo useradd -M -s /bin/sh composer
+          printf 'composer:Aé´^~¨12\n' | sudo chpasswd
+          install -d -m 755 /tmp/nirulock-compose
+          install -m 755 target/release/nirulock tests/compose-unlock.sh /tmp/nirulock-compose/
+          sudo -u composer env LANG=C.UTF-8 sh /tmp/nirulock-compose/compose-unlock.sh /tmp/nirulock-compose/nirulock :91
+          sudo -u composer env LANG=en_US.UTF-8 sh /tmp/nirulock-compose/compose-unlock.sh /tmp/nirulock-compose/nirulock :91
+      - name: CAVA stops repainting in silence
+        run: sh tests/resource-check.sh target/release/nirulock
+      # K4: no account, no lock; never a fallback to $USER or root.
+      - name: A process without an account refuses to lock
+        run: |
+          Xvfb :89 -screen 0 800x600x24 -nolisten tcp -noreset & x=$!
+          sleep 1
+          if sudo env -i DISPLAY=:89 USER=root setpriv --reuid 54321 --regid 54321 --clear-groups target/release/nirulock 2> refuse.log; then
+            echo "FAIL: locked without an account"; exit 1
+          fi
+          grep -q 'refusing to lock' refuse.log
+          kill $x
       - name: Legacy timeout and input isolation regression
         run: xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo test --locked --test x11 -- --ignored --test-threads=1
       - name: Shellcheck
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
             -S warning -s sh -e SC1007 /src/install.sh /src/tests/installer.sh
+
+  # Locked builds on the declared rust-version and on Debian 13's rustc.
+  msrv:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.75", "1.85"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev pkg-config
+      - run: cargo build --locked --all-targets
 
   pam-distros:
     runs-on: ubuntu-22.04

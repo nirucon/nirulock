@@ -29,12 +29,18 @@ nirulock --config
 nirulock --version
 ```
 
-Super+Escape locks in NIRUWM. The lock shows a Caps Lock indicator when active;
-AltGr and Latin-1 case conversion are supported for password input.
+Super+Escape locks in NIRUWM. The lock shows a Caps Lock indicator when active
+and, when more than one keyboard layout is configured, the active one next to
+the prompt (`[SE] password:`), because a password typed in the wrong layout is
+the most common wrong password.
 
 Settings live in `~/.config/niruui/lock.toml` (XDG respected). Optional
-`font_path`, `rune_font_path`, `font_size` and `[palette]` overrides are shown in
-[config.example.toml](config.example.toml).
+`font_path`, `rune_font_path`, `font_size`, `prompt_echo` and `[palette]`
+overrides are shown in [config.example.toml](config.example.toml).
+
+`prompt_echo = "count"` (the default) shows one `*` per typed character.
+`prompt_echo = "pulse"` shows a fixed row of eight cells with one lit `*` that
+jumps to a random cell on every key, so the password length is never shown.
 
 ### Layouts
 
@@ -51,7 +57,11 @@ Choose one with `layout = "minimal" | "terminal" | "runic" | "corner" | "cava"`:
 The `cava` layout samples system audio through [CAVA](https://github.com/karlstav/cava)
 at 30 frames per second with the same smoothing as NIRUAMP. Between full lock
 frames only the spectrum rectangle is repainted, and CopyArea exposures are
-disabled, so a locked machine does not spin or heat up. Bars follow the active
+disabled. The spectrum pauses whenever it cannot be seen or has nothing to
+show: with the display off (DPMS standby, suspend or off) CAVA is stopped and
+restarted as soon as the display is on, and after two seconds of silence the
+repaint stops on a flat frame until the first sound. A locked machine with no
+audio then only wakes for the minute clock. Bars follow the active
 NIRUX theme's focus colour and lighter peak. Set `visualizer = false` to
 keep the cava composition without the spectrum. If CAVA is not installed, the
 lock still works and simply omits the bars; the password prompt never moves
@@ -64,16 +74,33 @@ are never logged.
 
 ## Behaviour
 
-Only successful PAM authentication unlocks. NIRULOCK publishes
+Only successful PAM authentication unlocks. The account is the owner of the
+process, from the password database; if it cannot be found the lock refuses to
+start rather than fall back to `$USER` or `root`. Messages from PAM modules are
+shown under the prompt after a failed attempt, for example `pam_faillock`'s
+"The account is locked due to 3 failed logins", so a lockout no longer looks
+like a wrong password. A failure is shown for two seconds in the theme's
+warning colour together with the number of failed attempts since locking; the
+entry stays usable the whole time. Every copy of the password (the entry, the
+authentication worker and the PAM response) is wiped after use. NIRULOCK publishes
 `_NIRU_LOCK_READY` after verified keyboard/pointer grabs and mapping, and clears
 it on unlock; `niructl suspend` requires that readiness. Content follows the
 selected suite theme on an opaque black background. The prompt stays on its
 selected output and falls back if that output disappears. Authentication runs on
 one worker while X11 remains responsive.
 
-Basic Swedish/US, Shift and AltGr input is supported. Full compose/input-method
-support is not implemented. X11 cannot isolate the lock from hostile clients on
-the same display server.
+### Input
+
+Keys are translated like in a normal X session: through libxkbcommon's XKB
+state (Shift, AltGr/Level3, Level5, NumLock and layout groups) and the locale's
+compose table, so dead keys (`´ ` ^ ~ ¨` on the Swedish layout), composed
+letters such as `é` and keypad digits all reach PAM as the same characters a
+terminal produces. libxkbcommon, libxkbcommon-x11 and libxcb are loaded at
+runtime; without them the lock still starts and uses the core keymap with a
+built-in compose table that matches libX11 for the Latin-1 dead keys. Escape
+clears the entry, Backspace first cancels a pending dead key. Input methods
+(IBus, Fcitx) are not used: the lock holds the keyboard grab itself. X11
+cannot isolate the lock from hostile clients on the same display server.
 
 ## NIRUX suite
 
@@ -86,6 +113,11 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 sh tests/installer.sh
+sh tests/resource-check.sh target/release/nirulock
 ```
+
+`tests/compose-unlock.sh` types a password with dead keys and keypad digits in
+its own Xvfb; run it as a disposable test account whose password is the
+fixture described in the script.
 
 MIT. Copyright 2026 Nicklas Rudolfsson.

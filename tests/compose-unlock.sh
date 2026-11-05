@@ -71,4 +71,5 @@ wait "$lock"
 status=$?
 lock=
 [ "$status" -eq 0 ] || fail "lock exited with status $status"
-printf 'OK   dead keys, compose and keypad digits unlock through PAM\n'
+printf 'OK   dead keys, compose and keypad digits unlock through PAM (%s)\n' \
+  "$(sed -n 's/.*keyboard: //p' "$dir/state/nirulock/trace.log" | tail -1)"
