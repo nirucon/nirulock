@@ -22,6 +22,7 @@ mod palette;
 mod pam;
 mod quotes;
 mod secret;
+mod sound;
 mod visual;
 
 #[derive(Debug)]
@@ -310,6 +311,8 @@ impl Lock {
         // `niructl` uses it before suspending or reporting a lock as active.
         lock.publish_ready(true)?;
         lock.ready = true;
+        // The NIRUX lock chime (off unless enabled in sounds.toml).
+        sound::play("lock");
         Ok(lock)
     }
 
@@ -1057,6 +1060,9 @@ impl Lock {
                 self.surface.c.flush()?;
                 self.touch_idle_clock();
                 self.trace("password accepted, idle clock told");
+                // The unlock chime (off unless enabled), after the session is
+                // already back: delivering the request is bounded.
+                sound::play_before_exit("unlock", std::time::Duration::from_millis(150));
                 // process::exit skips destructors: stop CAVA and remove its
                 // temporary config explicitly. The audio detector is told to
                 // stop and is not waited for.
@@ -1071,6 +1077,8 @@ impl Lock {
                 // Shown under the prompt, for example pam_faillock's lockout.
                 self.pam_message = outcome.message;
                 self.failed = self.failed.saturating_add(1);
+                // A low, soft thud for a rejected password.
+                sound::play("auth-fail");
             }
             Err(e) => {
                 self.state = State::Wrong;

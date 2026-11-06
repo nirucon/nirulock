@@ -224,7 +224,11 @@ shown under the prompt after a failed attempt, for example `pam_faillock`'s
 "The account is locked due to 3 failed logins", so a lockout no longer looks
 like a wrong password. A failure is shown for two seconds in the theme's
 warning colour together with the number of failed attempts since locking; the
-entry stays usable the whole time. Every copy of the password (the entry, the
+entry stays usable the whole time. With NIRUNOTIFY running, a rejected password
+also plays the soft NIRUX `auth-fail` sound, and locking and unlocking can play
+a near-silent chime (`lock`/`unlock`, off by default in
+`~/.config/nirux/sounds.toml`). The request is one line on NIRUNOTIFY's socket,
+sent after PAM has answered; it never affects authentication. Every copy of the password (the entry, the
 authentication worker and the PAM response) is wiped after use. NIRULOCK publishes
 `_NIRU_LOCK_READY` after verified keyboard/pointer grabs and mapping, and clears
 it on unlock; `niructl suspend` requires that readiness. Content follows the
