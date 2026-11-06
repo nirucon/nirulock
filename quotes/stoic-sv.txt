@@ -1,0 +1,184 @@
+# NIRU quotes: stoic-sv
+# The passages of stoic-en in Swedish: Roman Stoics on moderation, few
+# words, friendship, fate, mortality and simple living.
+# Sources: three Seneca passages are verbatim from Johan Bergman's published
+#   translation, "Om livets korthet" (2nd ed. 1918), public domain (Bergman
+#   died 1951): https://runeberg.org/livkort/ (spelling as printed). All
+#   others are Swedish renderings made for NIRUX from George Long's and
+#   Aubrey Stewart's public-domain English translations (see stoic-en), not
+#   a published translation; their attributions say "NIRUX-tolkning".
+#   "…" marks an omission, as in stoic-en. See SOURCES.md.
+#
+# HOW TO EDIT
+#   Quotes are separated by a blank line. A line starting with "— " is the
+#   attribution, a line starting with "#" is a comment. Delete, change or
+#   add quotes freely. The file name without ".txt" is the collection name
+#   used by the quotes = [...] option, e.g. quotes = ["havamal-*", "stoic-en"].
+#   Files in ~/.config/niru/quotes/ are never overwritten by the apps.
+
+Människor söker sig tillflyktsorter: hus på landet,
+stränder och berg; … men det står i din makt
+att, när du vill, dra dig tillbaka in i dig själv.
+— Marcus Aurelius, Självbetraktelser IV.3 (NIRUX-tolkning efter G. Long)
+
+Lev inte som om du hade tiotusen år framför dig.
+Döden hänger över dig. Medan du lever,
+medan det står i din makt: var god.
+— Marcus Aurelius, Självbetraktelser IV.17 (NIRUX-tolkning efter G. Long)
+
+Allt varar bara en dag,
+både den som minns och det som blir ihågkommet.
+— Marcus Aurelius, Självbetraktelser IV.35 (NIRUX-tolkning efter G. Long)
+
+Gå då genom denna lilla tid i samklang med naturen,
+och sluta din färd i frid, så som en oliv faller när den är mogen
+och välsignar naturen som bar fram den och tackar trädet den växte på.
+— Marcus Aurelius, Självbetraktelser IV.48 (NIRUX-tolkning efter G. Long)
+
+Var som udden där vågorna ständigt bryts:
+den står fast och tämjer vattnets raseri omkring sig.
+… Minns också, varje gång något vill väcka din harm,
+att hålla fast vid detta: det här är ingen olycka,
+men att bära det med värdighet är en lycka.
+— Marcus Aurelius, Självbetraktelser IV.49 (NIRUX-tolkning efter G. Long)
+
+När du om morgonen ogärna stiger upp, ha då denna tanke till hands:
+jag stiger upp till en människas arbete.
+— Marcus Aurelius, Självbetraktelser V.1 (NIRUX-tolkning efter G. Long)
+
+Visa då de egenskaper som helt står i din makt:
+uppriktighet, allvar, uthållighet i arbete, återhållsamhet med njutningar,
+förnöjsamhet med din lott och med lite, välvilja, öppenhet,
+ingen kärlek till överflöd, ingen tid åt struntsaker, storsinthet.
+— Marcus Aurelius, Självbetraktelser V.5 (NIRUX-tolkning efter G. Long)
+
+Sådana som dina vanliga tankar är,
+sådant blir också ditt sinne;
+ty själen färgas av tankarna.
+— Marcus Aurelius, Självbetraktelser V.16 (NIRUX-tolkning efter G. Long)
+
+Håll dig då enkel, god, ren, allvarlig, fri från tillgjordhet,
+en vän av rättvisan, en som vördar gudarna, vänlig, kärleksfull,
+ihärdig i allt som är rätt att göra. … Vörda gudarna och hjälp människorna.
+Livet är kort.
+— Marcus Aurelius, Självbetraktelser VI.30 (NIRUX-tolkning efter G. Long)
+
+När du vill glädja dig,
+tänk då på de goda sidorna hos dem som lever med dig:
+till exempel den enes flit, den andres blygsamhet,
+den tredjes frikostighet och någon annan god egenskap hos en fjärde.
+— Marcus Aurelius, Självbetraktelser VI.48 (NIRUX-tolkning efter G. Long)
+
+Låt inte det som ska komma oroa dig. Du kommer till det,
+om det måste ske, med samma förnuft
+som du nu använder för det som är.
+— Marcus Aurelius, Självbetraktelser VII.8 (NIRUX-tolkning efter G. Long)
+
+Ta emot rikedom och framgång utan högmod,
+och var beredd att släppa dem.
+— Marcus Aurelius, Självbetraktelser VIII.33 (NIRUX-tolkning efter G. Long)
+
+Tala inte längre alls om hurdan en god människa bör vara,
+utan var en sådan.
+— Marcus Aurelius, Självbetraktelser X.16 (NIRUX-tolkning efter G. Long)
+
+Önska inte att det som händer ska hända som du vill,
+utan önska att det som händer ska vara som det är,
+så får ditt liv ett lugnt och jämnt flöde.
+— Epiktetos, Handbok 8 (NIRUX-tolkning efter G. Long)
+
+Säg aldrig om något: jag har förlorat det, utan säg: jag har lämnat det tillbaka.
+… Så länge han låter dig ha det, vårda det
+som något som tillhör en annan, så som resande gör med sitt värdshus.
+— Epiktetos, Handbok 11 (NIRUX-tolkning efter G. Long)
+
+Kom ihåg att du i livet bör uppföra dig som vid en måltid.
+Anta att något bärs runt och kommer fram till dig.
+Räck ut handen och ta en del med anstånd.
+Anta att det går förbi dig. Håll inte kvar det.
+— Epiktetos, Handbok 15 (NIRUX-tolkning efter G. Long)
+
+Ha döden och landsflykten och allt annat som verkar skrämmande
+dagligen för ögonen, men mest av allt döden:
+då kommer du aldrig att tänka något lågt
+eller begära något omåttligt.
+— Epiktetos, Handbok 21 (NIRUX-tolkning efter G. Long)
+
+Och vad vill du helst ha,
+pengar eller en trofast och blygsam vän?
+— Epiktetos, Handbok 24 (NIRUX-tolkning efter G. Long)
+
+Låt tystnad vara regeln,
+eller säg bara det som är nödvändigt, och med få ord.
+— Epiktetos, Handbok 33 (NIRUX-tolkning efter G. Long)
+
+Ta det som gäller kroppen bara till det rena behovet:
+mat, dryck, kläder, hus och tjänstefolk;
+men avstå från allt som är till för syns skull eller för lyx.
+— Epiktetos, Handbok 33 (NIRUX-tolkning efter G. Long)
+
+Om någon berättar för dig att en viss person talar illa om dig,
+försvara dig inte mot det du fått höra, utan svara:
+Han kände visst inte till mina andra fel,
+annars hade han inte nämnt bara dessa.
+— Epiktetos, Handbok 33 (NIRUX-tolkning efter G. Long)
+
+Dessa slutsatser hänger inte ihop: jag är rikare än du,
+alltså är jag bättre än du. … Däremot hänger dessa ihop:
+jag är rikare än du, alltså är mina ägodelar större än dina.
+… Men du är varken ägodelar eller tal.
+— Epiktetos, Handbok 44 (NIRUX-tolkning efter G. Long)
+
+Kalla dig aldrig filosof, och tala inte mycket
+bland de obildade om lärosatser, utan gör det som följer av dem.
+Säg till exempel inte vid en måltid hur man bör äta,
+utan ät som man bör äta.
+— Epiktetos, Handbok 46 (NIRUX-tolkning efter G. Long)
+
+Nej, vi ha icke för liten tid oss tillmätt, men vi förslösa för mycket av den.
+… Så är det: naturen har icke givit oss ett för kort liv,
+men vi ha själva gjort det sådant;
+vi lida ingen brist på tid, vi slösa med den.
+— Seneca, Om livets korthet 1 (övers. Johan Bergman, 1918)
+
+Varför klagar man då över naturen? Naturen har unnat oss allt gott.
+Livet är långt, om man förstår att bruka det.
+— Seneca, Om livets korthet 2 (övers. Johan Bergman, 1918)
+
+Elden prövar guldet, olyckan prövar de modiga.
+— Seneca, Om försynen 5 (NIRUX-tolkning efter A. Stewart)
+
+Men ingenting är så hugnesamt för själen, som en trogen och förtrogen vänskap.
+Huru gott är det ej, när du har trofasta hjärtan,
+åt vilka du med trygghet kan anförtro varje hemlighet, … vilkas samtal
+kan lindra dina bekymmer, vilkas uttalande kan hjälpa dig att fatta ett beslut,
+vilkas munterhet kan skingra molnen i ditt sinne, vilkas blotta åsyn är dig en glädje!
+— Seneca, Om själens ro 7 (övers. Johan Bergman, 1918)
+
+Låt oss vänja oss vid att lägga bort det som bara är yttre prål,
+och mäta tingen efter deras nytta, inte efter deras grannlåt:
+låt hungern stillas av mat och törsten släckas av dryck,
+… och låt oss göra det till vår sak att hämta vår rikedom
+ur oss själva och inte ur lyckans hand.
+— Seneca, Om själens ro 9 (NIRUX-tolkning efter A. Stewart)
+
+… kroppens behov är få: den behöver skydd mot kylan
+och något som stillar hunger och törst.
+Alla begär utöver detta är laster, inte behov.
+— Seneca, Tröstskrift till Helvia 10 (NIRUX-tolkning efter A. Stewart)
+
+Den som håller sig inom de gränser naturen har satt,
+kommer inte att känna fattigdom; den som går utöver dem
+blir alltid fattig, hur stor hans rikedom än är.
+— Seneca, Tröstskrift till Helvia 11 (NIRUX-tolkning efter A. Stewart)
+
+Det vi håller i händerna, ser med ögonen och som vår girighet
+klamrar sig fast vid är förgängligt, … men en välgärning består
+även sedan det den gavs med har gått förlorat;
+ty den är en god gärning, som inget våld kan göra ogjord.
+— Seneca, Om välgärningar I.5 (NIRUX-tolkning efter A. Stewart)
+
+Det är alltså inte det som görs eller ges som ska beaktas,
+utan andan i vilken det görs eller ges; ty en välgärning finns
+inte i det som görs eller ges, utan i sinnet hos den som gör eller ger.
+— Seneca, Om välgärningar I.6 (NIRUX-tolkning efter A. Stewart)

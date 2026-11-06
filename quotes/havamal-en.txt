@@ -1,0 +1,158 @@
+# NIRU quotes: havamal-en
+# Stanzas from Hávamál, the Old Norse sayings of the High One, in English:
+# the same stanzas as havamal-sv.
+# Source: Henry Adams Bellows (tr.), "The Poetic Edda" (1923), "Hovamol",
+#   verbatim from https://en.wikisource.org/wiki/The_Poetic_Edda_(tr._Bellows)/Hovamol
+#   Public domain (Bellows died 1939). Stanza numbers are Bellows'; they
+#   differ from Brate's for 77, 78, 139 and 142 (Brate 76, 77, 138, 141).
+#   The gap Bellows prints mid-line is a single space here; lines in
+#   parentheses are his own (he marks them as likely later additions).
+#
+# HOW TO EDIT
+#   Quotes are separated by a blank line. A line starting with "— " is the
+#   attribution, a line starting with "#" is a comment. Delete, change or
+#   add quotes freely. The file name without ".txt" is the collection name
+#   used by the quotes = [...] option, e.g. quotes = ["havamal-*", "stoic-en"].
+#   Files in ~/.config/niru/quotes/ are never overwritten by the apps.
+
+Within the gates ere a man shall go,
+(Full warily let him watch,)
+Full long let him look about him;
+For little he knows where a foe may lurk,
+And sit in the seats within.
+— Hávamál 1 (tr. Henry Adams Bellows, 1923)
+
+A man shall not boast of his keenness of mind,
+But keep it close in his breast;
+To the silent and wise does ill come seldom
+When he goes as guest to a house;
+(For a faster friend one never finds
+Than wisdom tried and true.)
+— Hávamál 6 (tr. Henry Adams Bellows, 1923)
+
+A better burden may no man bear
+For wanderings wide than wisdom;
+It is better than wealth on unknown ways,
+And in grief a refuge it gives.
+— Hávamál 10 (tr. Henry Adams Bellows, 1923)
+
+The sluggard believes he shall live forever,
+If the fight he faces not;
+But age shall not grant him the gift of peace,
+Though spears may spare his life.
+— Hávamál 16 (tr. Henry Adams Bellows, 1923)
+
+He alone is aware who has wandered wide,
+And far abroad has fared,
+How great a mind is guided by him
+That wealth of wisdom has.
+— Hávamál 18 (tr. Henry Adams Bellows, 1923)
+
+The herds know well when home they shall fare,
+And then from the grass they go;
+But the foolish man his belly's measure
+Shall never know aright.
+— Hávamál 21 (tr. Henry Adams Bellows, 1923)
+
+A witless man, when he meets with men,
+Had best in silence abide;
+For no one shall find that nothing he knows,
+If his mouth is not open too much.
+(But a man knows not, if nothing he knows,
+When his mouth has been open too much.)
+— Hávamál 27 (tr. Henry Adams Bellows, 1923)
+
+If a friend thou hast whom thou fully wilt trust,
+And good from him wouldst get,
+Thy thoughts with his mingle, and gifts shalt thou make,
+And fare to find him oft.
+— Hávamál 44 (tr. Henry Adams Bellows, 1923)
+
+Young was I once, and wandered alone,
+And nought of the road I knew;
+Rich did I feel when a comrade I found,
+For man is man's delight.
+— Hávamál 47 (tr. Henry Adams Bellows, 1923)
+
+On the hillside drear the fir-tree dies,
+All bootless its needles and bark;
+It is like a man whom no one loves,—
+Why should his life be long?
+— Hávamál 50 (tr. Henry Adams Bellows, 1923)
+
+A measure of wisdom each man shall have,
+But never too much let him know;
+The fairest lives do those men live
+Whose wisdom wide has grown.
+— Hávamál 54 (tr. Henry Adams Bellows, 1923)
+
+A measure of wisdom each man shall have,
+But never too much let him know;
+Let no man the fate before him see,
+For so is he freest from sorrow.
+— Hávamál 56 (tr. Henry Adams Bellows, 1923)
+
+A brand from a brand is kindled and burned,
+And fire from fire begotten;
+And man by his speech is known to men,
+And the stupid by their stillness.
+— Hávamál 57 (tr. Henry Adams Bellows, 1923)
+
+To question and answer must all be ready
+Who wish to be known as wise;
+Tell one thy thoughts, but beware of two,—
+All know what is known to three.
+— Hávamál 63 (tr. Henry Adams Bellows, 1923)
+
+The man who is prudent a measured use
+Of the might he has will make;
+He finds when among the brave he fares
+That the boldest he may not be.
+— Hávamál 64 (tr. Henry Adams Bellows, 1923)
+
+Fire for men is the fairest gift,
+And power to see the sun;
+Health as well, if a man may have it,
+And a life not stained with sin.
+— Hávamál 68 (tr. Henry Adams Bellows, 1923)
+
+Cattle die, and kinsmen die,
+And so one dies one's self;
+But a noble name will never die,
+If good renown one gets.
+— Hávamál 77 (tr. Henry Adams Bellows, 1923)
+
+Cattle die, and kinsmen die,
+And so one dies one's self;
+One thing I know that never dies,
+The fame of a dead man's deeds.
+— Hávamál 78 (tr. Henry Adams Bellows, 1923)
+
+I rede thee, Loddfafnir! and hear thou my rede,—
+Profit thou hast if thou hearest,
+Great thy gain if thou learnest:
+If a friend thou hast whom thou fully wilt trust,
+Then fare to find him oft;
+For brambles grow and waving grass
+On the rarely trodden road.
+— Hávamál 119 (tr. Henry Adams Bellows, 1923)
+
+Oft scarcely he knows who sits in the house
+What kind is the man who comes;
+None so good is found that faults he has not,
+Nor so wicked that nought he is worth.
+— Hávamál 133 (tr. Henry Adams Bellows, 1923)
+
+I ween that I hung on the windy tree,
+Hung there for nights full nine;
+With the spear I was wounded, and offered I was
+To Othin, myself to myself,
+On the tree that none may ever know
+What root beneath it runs.
+— Hávamál 139 (tr. Henry Adams Bellows, 1923)
+
+Then began I to thrive, and wisdom to get,
+I grew and well I was;
+Each word led me on to another word,
+Each deed to another deed.
+— Hávamál 142 (tr. Henry Adams Bellows, 1923)

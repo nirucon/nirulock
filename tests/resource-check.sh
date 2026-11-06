@@ -97,20 +97,25 @@ touch "$TEST/sound"
 PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-auto.log" 2>&1 & LOCK=$!
 sleep 3
 kill -0 "$LOCK" || { cat "$TEST/lock-auto.log"; exit 1; }
-quotes=$TEST/config/niru/quotes.txt
-[ -f "$quotes" ] || fail "the default quotes file was not written"
-[ "$(stat -c %a "$quotes")" = 644 ] || fail "the quotes file is not 0644"
-grep -q 'runeberg.org/eddan' "$quotes" || fail "the quotes file lacks its source"
+quotes=$TEST/config/niru/quotes
+for name in havamal-en havamal-sv stoic-en stoic-sv; do
+  [ -f "$quotes/$name.txt" ] || fail "the collection $name was not written"
+  [ "$(stat -c %a "$quotes/$name.txt")" = 644 ] || fail "$name.txt is not 0644"
+done
+grep -q 'runeberg.org/eddan' "$quotes/havamal-sv.txt" || fail "havamal-sv lacks its source"
 pgrep -f "$TEST/bin/cava" > /dev/null && fail "CAVA started without music"
 auto_cpu=$(cpu "$LOCK" 6)
 auto_frames=$(frames)
 printf 'quotes:  nirulock %s%% CPU, %s distinct frames of 5, no CAVA\n' "$auto_cpu" "$auto_frames"
 [ "$auto_frames" -eq 1 ] || fail "the quote view repainted between changes"
 awk -v c="$auto_cpu" 'BEGIN { exit !(c <= 0.3) }' || fail "quote view CPU above 0.3%"
-# An existing file is never overwritten.
-printf 'Mitt eget citat\n' > "$quotes"
+# An existing directory is never written into: an edited collection stays
+# edited and a deleted one stays deleted.
+printf 'My own quote\n' > "$quotes/havamal-en.txt"
+rm "$quotes/stoic-sv.txt"
 kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
 PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-auto.log" 2>&1 & LOCK=$!
 sleep 2
-[ "$(cat "$quotes")" = "Mitt eget citat" ] || fail "the quotes file was overwritten"
+[ "$(cat "$quotes/havamal-en.txt")" = "My own quote" ] || fail "a collection was overwritten"
+[ ! -e "$quotes/stoic-sv.txt" ] || fail "a deleted collection was recreated"
 printf 'PASS: without music the panel shows quotes and CAVA never starts\n'

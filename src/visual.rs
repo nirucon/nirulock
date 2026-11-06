@@ -4,7 +4,7 @@
 //! `visual = "auto"` (the default) starts the CAVA child only when the
 //! [`audio`](crate::audio) detector hears music, and stops it, not merely
 //! pauses it, after its silence window. Without music the panel shows one
-//! quote from the [`quotes`](crate::quotes) file, changed every
+//! quote from the [`quotes`](crate::quotes) collections, changed every
 //! [`ROTATE_EVERY`] with a soft fade and not redrawn in between. `"cava"` is
 //! the spectrum alone, exactly as before; `"quotes"` is quotes alone.
 //!
@@ -21,7 +21,7 @@ use crate::{
     cava::{self, Cava},
     core::{Surface, TextRenderer},
     palette::Palette,
-    quotes::{self, Arranged, Loader, Quote},
+    quotes::{self, Arranged, Deck, Loader, Quote},
 };
 use std::{
     io::Read,
@@ -355,7 +355,6 @@ pub struct Visual {
     loader: Option<Loader>,
     quotes: Vec<Quote>,
     quote: Option<Quote>,
-    last_index: Option<usize>,
     arranged: Option<((i16, i16, u16, u16), Arranged)>,
     fonts: Vec<TextRenderer>,
     base: TextRenderer,
@@ -365,18 +364,20 @@ pub struct Visual {
     display_on: bool,
     /// A change that needs one repaint without a fade.
     repaint: bool,
-    rng: u64,
+    deck: Deck,
 }
 
 impl Visual {
     /// `renderer` supplies the theme font; `base_size` is the largest quote
-    /// size. `app` names the client for the sound server.
+    /// size. `app` names the client for the sound server. `collections` is
+    /// the `quotes` setting: patterns of the collections to show.
     pub fn new(
         mode: Mode,
         fades: bool,
         renderer: &TextRenderer,
         base_size: f32,
         app: &str,
+        collections: &[String],
     ) -> Self {
         let now = Instant::now();
         let wake = UnixStream::pair().ok().and_then(|(read, write)| {
@@ -387,7 +388,7 @@ impl Visual {
         let writer = || wake.as_ref().and_then(|(_, w)| w.try_clone().ok());
         let audio = (mode == Mode::Auto).then(|| Audio::start(app, writer()));
         let loader = matches!(mode, Mode::Auto | Mode::Quotes)
-            .then(|| Loader::start(writer()))
+            .then(|| Loader::start(writer(), collections.to_vec()))
             .flatten();
         let mut visual = Self {
             panel: Panel::new(mode, fades, now),
@@ -396,7 +397,6 @@ impl Visual {
             loader,
             quotes: Vec::new(),
             quote: None,
-            last_index: None,
             arranged: None,
             fonts: Vec::new(),
             base: renderer.at_size(base_size),
@@ -404,7 +404,7 @@ impl Visual {
             wake,
             display_on: true,
             repaint: false,
-            rng: seed(),
+            deck: Deck::new(seed()),
         };
         visual.tick(now);
         visual
@@ -480,6 +480,7 @@ impl Visual {
     pub fn tick(&mut self, now: Instant) {
         if let Some(quotes) = self.loader.as_ref().and_then(Loader::take) {
             self.quotes = quotes;
+            self.deck.reset();
         }
         let heard = self.audio.as_ref().map_or(Heard::Silent, Audio::heard);
         let actions = self.panel.step(heard, !self.quotes.is_empty(), now);
@@ -507,28 +508,15 @@ impl Visual {
 
     fn pick(&mut self) {
         self.arranged = None;
-        let count = self.quotes.len();
-        if count == 0 {
-            self.quote = None;
-            return;
+        let len = self.quotes.len();
+        let mut index = self.deck.draw(len);
+        // After a new pool the deck starts afresh; skip the quote on screen.
+        if len > 1 && index.and_then(|i| self.quotes.get(i)) == self.quote.as_ref() {
+            index = self.deck.draw(len);
         }
-        let mut index = (self.next_random() % count as u64) as usize;
-        if count > 1 && Some(index) == self.last_index {
-            index = (index + 1 + (self.next_random() % (count as u64 - 1)) as usize) % count;
-        }
-        self.last_index = Some(index);
-        self.quote = self.quotes.get(index).cloned();
+        self.quote = index.and_then(|i| self.quotes.get(i)).cloned();
     }
 
-    fn next_random(&mut self) -> u64 {
-        // xorshift64*
-        self.rng ^= self.rng >> 12;
-        self.rng ^= self.rng << 25;
-        self.rng ^= self.rng >> 27;
-        self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d)
-    }
-
-    /// Lay out the current quote for `rect`, once per quote and size.
     fn arrange(&mut self, rect: (i16, i16, u16, u16)) {
         if self.arranged.as_ref().is_some_and(|(r, _)| *r == rect) {
             return;

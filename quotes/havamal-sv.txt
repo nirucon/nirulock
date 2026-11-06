@@ -1,50 +1,16 @@
-# NIRU-citat
+# NIRU quotes: havamal-sv
+# Stanzas from Hávamál (Den höges sång), the Old Norse sayings of the
+# High One, in Swedish.
+# Source: Erik Brate (tr.), "Eddan. De nordiska guda- och hjältesångerna"
+#   (1913), verbatim from https://runeberg.org/eddan/se-02.html.
+#   Stanza numbers follow that edition. Public domain (Brate died 1924).
 #
-# NIRULOCK och NIRUSCREENSAVER visar ett av citaten i den här filen där
-# CAVA-spektrumet annars ritas, när ingen musik spelas. Citatet byts mot
-# ett annat, slumpvis valt, ungefär varje minut.
-#
-# Filen ligger i ${XDG_CONFIG_HOME:-~/.config}/niru/quotes.txt och delas av
-# båda programmen. Den är din: programmen skriver den bara när den saknas och
-# skriver aldrig över den. Tar du bort filen skapas standardcitaten på nytt.
-#
-# SÅ ÄR FILEN UPPBYGGD
-#   - Citaten skiljs åt av en eller flera tomma rader.
-#   - Ett citat får ha flera rader. Radbrytningarna visas som du skrivit dem
-#     (för långa rader bryts dessutom så att de får plats).
-#   - En rad som börjar med "— " (tankstreck och mellanslag) eller "-- "
-#     (två bindestreck och mellanslag) är upphovsraden. Den visas nedtonad
-#     under citatet. Den kan utelämnas.
-#   - Rader som börjar med "#" är kommentarer, som de här, och visas aldrig.
-#
-# LÄGGA TILL ETT CITAT
-#   Skriv citatet var som helst i filen, till exempel sist, med en tom rad
-#   före och efter. Exempel (utan "#" och mellanslagen först på raderna):
-#
-#   Den som väntar på något gott
-#   väntar aldrig för länge.
-#   -- Svenskt ordspråk
-#
-# ÄNDRA ETT CITAT
-#   Skriv om texten direkt i filen.
-#
-# TA BORT ETT CITAT
-#   Radera dess rader, eller sätt "#" först på varje rad. Vill du inte ha
-#   några citat alls kan du tömma filen, eller sätta visual = "cava" eller
-#   "none" i lock.toml och screensaver.toml i ~/.config/niruui/.
-#
-# NÄR SYNS ÄNDRINGARNA?
-#   Nästa gång låset eller skärmsläckaren startar. Ändrar du filen medan de
-#   visas läses den in igen vid nästa citatbyte.
-#
-# Mycket långa citat kortas med "…" så att de får plats. Filen ska vara
-# UTF-8.
-#
-# Standardcitaten är strofer ur Hávamál (Den höges sång) i Erik Brates
-# översättning, "Eddan. De nordiska guda- och hjältesångerna" (1913), som är
-# fri från upphovsrätt (Brate dog 1924). Texten är ordagrant hämtad från
-# Projekt Runeberg: https://runeberg.org/eddan/se-02.html
-# Strofernas nummer följer den utgåvan.
+# HOW TO EDIT
+#   Quotes are separated by a blank line. A line starting with "— " is the
+#   attribution, a line starting with "#" is a comment. Delete, change or
+#   add quotes freely. The file name without ".txt" is the collection name
+#   used by the quotes = [...] option, e.g. quotes = ["havamal-*", "stoic-en"].
+#   Files in ~/.config/niru/quotes/ are never overwritten by the apps.
 
 Alla dörrar,
 innan in man går,

@@ -221,10 +221,19 @@ impl Lock {
         let setup = surface.c.setup().clone();
         let renderer = core::TextRenderer::new(&font, cfg.font_size, &setup)?;
         let clock_renderer = renderer.at_size((cfg.font_size * 2.4).max(cfg.font_size + 8.0));
-        // No file or sound-server I/O here: the quotes file and the audio
+        // No file or sound-server I/O here: the quote collections and the audio
         // detector are read on their own threads.
-        let visual = (cfg.layout == config::Layout::Cava && cfg.visual != visual::Mode::None)
-            .then(|| visual::Visual::new(cfg.visual, true, &renderer, cfg.font_size, "nirulock"));
+        let visual =
+            (cfg.layout == config::Layout::Cava && cfg.visual != visual::Mode::None).then(|| {
+                visual::Visual::new(
+                    cfg.visual,
+                    true,
+                    &renderer,
+                    cfg.font_size,
+                    "nirulock",
+                    &cfg.quotes,
+                )
+            });
         let power = visual.as_ref().map(|_| cava::DisplayPower::new(&surface.c));
         let rune_renderer = core::find_rune_font(cfg.rune_font_path.as_deref())
             .map(|font| core::TextRenderer::new(&font, cfg.font_size * 2.0, &setup))

@@ -1,0 +1,184 @@
+# NIRU quotes: stoic-en
+# Short passages from the Roman Stoics, chosen for their kinship with
+# Hávamál: moderation, few words, friendship, fate, mortality, simple living.
+# Sources, verbatim from Project Gutenberg (see SOURCES.md for each quote):
+#   Marcus Aurelius, Meditations, tr. George Long (1862), ebook 15877;
+#   Epictetus, Enchiridion, tr. George Long (1877), ebook 10661;
+#   Seneca, Minor Dialogues (1889) and On Benefits (1887), tr. Aubrey
+#   Stewart, ebooks 64576 and 3794. Public domain (Long died 1879, Stewart
+#   1918). "…" marks an omission; Gutenberg's "--" is printed as "—".
+#
+# HOW TO EDIT
+#   Quotes are separated by a blank line. A line starting with "— " is the
+#   attribution, a line starting with "#" is a comment. Delete, change or
+#   add quotes freely. The file name without ".txt" is the collection name
+#   used by the quotes = [...] option, e.g. quotes = ["havamal-*", "stoic-en"].
+#   Files in ~/.config/niru/quotes/ are never overwritten by the apps.
+
+Men seek retreats for themselves, houses in the country,
+sea-shores, and mountains; … it is in thy power
+whenever thou shalt choose to retire into thyself.
+— Marcus Aurelius, Meditations IV.3
+
+Do not act as if thou wert going to live ten thousand years.
+Death hangs over thee. While thou livest,
+while it is in thy power, be good.
+— Marcus Aurelius, Meditations IV.17
+
+Everything is only for a day,
+both that which remembers and that which is remembered.
+— Marcus Aurelius, Meditations IV.35
+
+Pass then through this little space of time conformably to nature,
+and end thy journey in content, as an olive falls off when it is ripe,
+blessing nature who produced it, and thanking the tree on which it grew.
+— Marcus Aurelius, Meditations IV.48
+
+Be like the promontory against which the waves continually break,
+but it stands firm and tames the fury of the water around it.
+… Remember too on every occasion which leads thee to vexation
+to apply this principle; not that this is a misfortune,
+but that to bear it nobly is good fortune.
+— Marcus Aurelius, Meditations IV.49
+
+In the morning when thou risest unwillingly,
+let this thought be present,—I am rising to the work of a human being.
+— Marcus Aurelius, Meditations V.1
+
+Show those qualities then which are altogether in thy power,
+sincerity, gravity, endurance of labor, aversion to pleasure,
+contentment with thy portion and with few things, benevolence,
+frankness, no love of superfluity, freedom from trifling, magnanimity.
+— Marcus Aurelius, Meditations V.5
+
+Such as are thy habitual thoughts,
+such also will be the character of thy mind;
+for the soul is dyed by the thoughts.
+— Marcus Aurelius, Meditations V.16
+
+Keep thyself then simple, good, pure, serious, free from affectation,
+a friend of justice, a worshipper of the gods, kind, affectionate,
+strenuous in all proper acts. … Reverence the gods, and help men.
+Short is life.
+— Marcus Aurelius, Meditations VI.30
+
+When thou wishest to delight thyself,
+think of the virtues of those who live with thee;
+for instance, the activity of one, and the modesty of another,
+and the liberality of a third, and some other good quality of a fourth.
+— Marcus Aurelius, Meditations VI.48
+
+Let not future things disturb thee, for thou wilt come to them,
+if it shall be necessary, having with thee the same reason
+which now thou usest for present things.
+— Marcus Aurelius, Meditations VII.8
+
+Receive [wealth or prosperity] without arrogance;
+and be ready to let it go.
+— Marcus Aurelius, Meditations VIII.33
+
+No longer talk at all about the kind of man
+that a good man ought to be, but be such.
+— Marcus Aurelius, Meditations X.16
+
+Seek not that the things which happen should happen as you wish;
+but wish the things which happen to be as they are,
+and you will have a tranquil flow of life.
+— Epictetus, Enchiridion 8
+
+Never say about anything, I have lost it, but say I have restored it.
+… So long as he may allow you, take care of it
+as a thing which belongs to another, as travellers do with their inn.
+— Epictetus, Enchiridion 11
+
+Remember that in life you ought to behave as at a banquet.
+Suppose that something is carried round and is opposite to you.
+Stretch out your hand and take a portion with decency.
+Suppose that it passes by you. Do not detain it.
+— Epictetus, Enchiridion 15
+
+Let death and exile and every other thing which appears dreadful
+be daily before your eyes; but most of all death:
+and you will never think of anything mean
+nor will you desire anything extravagantly.
+— Epictetus, Enchiridion 21
+
+Besides, which would you rather have,
+money or a faithful and modest friend?
+— Epictetus, Enchiridion 24
+
+And let silence be the general rule,
+or let only what is necessary be said, and in few words.
+— Epictetus, Enchiridion 33
+
+Take (apply) the things which relate to the body as far as the bare use,
+as food, drink, clothing, house, and slaves;
+but exclude everything which is for show or luxury.
+— Epictetus, Enchiridion 33
+
+If a man has reported to you, that a certain person speaks ill of you,
+do not make any defence (answer) to what has been told you; but reply,
+The man did not know the rest of my faults,
+for he would not have mentioned these only.
+— Epictetus, Enchiridion 33
+
+These reasonings do not cohere: I am richer than you,
+therefore I am better than you; … On the contrary, these rather cohere:
+I am richer than you, therefore my possessions are greater than yours;
+… But you are neither possession nor speech.
+— Epictetus, Enchiridion 44
+
+On no occasion call yourself a philosopher, and do not speak much
+among the uninstructed about theorems (philosophical rules, precepts);
+but do that which follows from them. For example, at a banquet
+do not say how a man ought to eat, but eat as you ought to eat.
+— Epictetus, Enchiridion 46
+
+We do not have a very short time assigned to us,
+but we lose a great deal of it: … we do not receive a short life,
+but we make it a short one, and we are not poor in days,
+but wasteful of them.
+— Seneca, Of the Shortness of Life 1
+
+Why do we complain of Nature? she has dealt kindly with us.
+Life is long enough, if you know how to use it.
+— Seneca, Of the Shortness of Life 2
+
+Fire tries gold, misfortune tries brave men.
+— Seneca, Of Providence 5
+
+… nothing delights the mind so much as faithful and pleasant friendship:
+what a blessing it is when there is one whose breast is ready
+to receive all your secrets with safety, … whose conversation removes
+your anxieties, whose advice assists your plans,
+whose cheerfulness dispels your gloom, whose very sight delights you!
+— Seneca, Of Peace of Mind 7
+
+Let us accustom ourselves to set aside mere outward show,
+and to measure things by their uses, not by their ornamental trappings:
+let our hunger be tamed by food, our thirst quenched by drinking,
+… and to make it our business to get our riches from ourselves
+and not from Fortune.
+— Seneca, Of Peace of Mind 9
+
+… the wants of the body are few: it wants protection from the cold,
+and the means of allaying hunger and thirst:
+all desires beyond these are vices, not necessities.
+— Seneca, Of Consolation, to Helvia 10
+
+He who restrains himself within the limits prescribed by nature,
+will not feel poverty; he who exceeds them will always be poor,
+however great his wealth may be.
+— Seneca, Of Consolation, to Helvia 11
+
+The things which we hold in our hands, which we see with our eyes,
+and which our avarice hugs, are transitory, … but a kindness lasts
+even after the loss of that by means of which it was bestowed;
+for it is a good deed, which no violence can undo.
+— Seneca, On Benefits I.5
+
+It is not, therefore, the thing which is done or given,
+but the spirit in which it is done or given, that must be considered,
+because a benefit exists, not in that which is done or given,
+but in the mind of the doer or giver.
+— Seneca, On Benefits I.6
