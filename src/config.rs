@@ -100,6 +100,9 @@ pub struct Config {
     pub prompt_echo: Echo,
     /// Deprecated compatibility input. Never used to dismiss a lock.
     pub lock_timeout_minutes: u64,
+    /// Draw the machine's hostname under the clock. Off by default, so a
+    /// locked screen in a shared place does not name the machine.
+    pub show_hostname: bool,
 }
 
 /// The built-in suite themes, for a component that does not carry the
@@ -269,6 +272,7 @@ impl Default for Config {
             warning: DEFAULT_WARNING,
             prompt_echo: Echo::Count,
             lock_timeout_minutes: 0,
+            show_hostname: false,
         }
     }
 }
@@ -382,6 +386,9 @@ impl Config {
         if let Some(n) = v.get("font_size").and_then(|x| x.as_float()) {
             cfg.font_size = n as f32;
         }
+        if let Some(enabled) = v.get("show_hostname").and_then(|x| x.as_bool()) {
+            cfg.show_hostname = enabled;
+        }
         if let Some(t) = v.get("palette").and_then(|x| x.as_table()) {
             let get = |name: &str, fallback: u32| -> u32 {
                 t.get(name)
@@ -439,7 +446,7 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nvisual: {}\nquotes: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)",
+            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nvisual: {}\nquotes: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)\nshow hostname: {}",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
@@ -450,6 +457,7 @@ impl Config {
             self.quotes.join(", "),
             self.rune_font_path.as_deref().unwrap_or("auto"),
             self.lock_timeout_minutes,
+            if self.show_hostname { "on" } else { "off" },
         )
     }
 }
@@ -564,5 +572,12 @@ mod tests {
         assert_eq!(p.focus, 0x040506);
         assert_eq!(p.background, 0x000000);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hostname_is_hidden_unless_asked_for() {
+        assert!(!Config::default().show_hostname);
+        let v: toml::Value = "show_hostname = true".parse().unwrap();
+        assert!(Config::from_value(&v).unwrap().show_hostname);
     }
 }

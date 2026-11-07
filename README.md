@@ -10,7 +10,7 @@ Native X11/PAM lock screen with clock, away time and a themed CAVA spectrum or q
 
 NIRULOCK is the lock screen of NIRUX. It authenticates only through PAM, grabs
 keyboard and pointer itself and draws a calm, opaque screen in the colours of
-the active NIRUX theme: a large clock and hostname, how long you have been
+the active NIRUX theme: a large clock, how long you have been
 away, the password prompt and, while music plays, a live CAVA spectrum. When
 it is quiet, it shows a quote from Hávamál or the Stoics instead.
 
@@ -96,11 +96,14 @@ Choose one with `layout`:
 
 | Layout | Composition |
 |---|---|
-| `cava` | Default. Large clock and hostname above the spectrum or a quote; lock state, away time and prompt below |
-| `minimal` | Centred clock, hostname, lock state, away time and prompt |
-| `terminal` | Left-aligned monospace screen with a `hostname:~$ lock` line |
+| `cava` | Default. Large clock above the spectrum or a quote; lock state, away time and prompt below |
+| `minimal` | Centred clock, lock state, away time and prompt |
+| `terminal` | Left-aligned monospace screen with a `~$ lock` line |
 | `runic` | The minimal composition with a discreet rune row when a runic font is available (ornamental only) |
-| `corner` | Clock top-left, hostname and away time at the bottom, prompt centred |
+| `corner` | Clock top-left, away time at the bottom, prompt centred |
+
+The hostname is not shown unless you set `show_hostname = true`; it then
+appears under the clock (`hostname:~$ lock` in `terminal`).
 
 ### Music or quotes
 
@@ -130,6 +133,7 @@ visualizer = true
 visual = "auto"            # auto, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns
 prompt_echo = "count"      # count: one * per character; pulse: hide the length
+show_hostname = false      # true: show the machine name under the clock
 font_size = 22.0
 # font_path = "/path/to/font.ttf"
 # rune_font_path = "/path/to/runic.ttf"

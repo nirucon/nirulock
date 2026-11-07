@@ -1,6 +1,6 @@
 //! Nirulock: the Niru Noir lock screen.
 //!
-//! Shows the same clock and hostname as NIRUSCREENSAVER, plus how long the
+//! Shows the same clock (and optional hostname) as NIRUSCREENSAVER, plus how long the
 //! machine has been away and a prompt. The screen stays covered until the
 //! password is accepted by PAM.
 //!
@@ -609,7 +609,11 @@ impl Lock {
         let area = self.prompt_area;
         let (centre, mid) = area.centre();
         let line = self.renderer.line_height();
-        let hostname = core::hostname();
+        let hostname = if self.cfg.show_hostname {
+            core::hostname()
+        } else {
+            String::new()
+        };
         let clock = core::clock_text(Local::now());
         let away = self.started.elapsed().as_secs();
         // The entry stays usable during checking and failure feedback; the
@@ -711,7 +715,7 @@ impl Lock {
                     self.surface.depth,
                     x,
                     line_at(0),
-                    &format!("{hostname}:~$ lock"),
+                    &prompt_line(&hostname, "lock"),
                     pal.muted,
                     pal.background,
                 )?;
@@ -1357,6 +1361,16 @@ fn wait_readable(fds: [Option<std::os::fd::RawFd>; 4], timeout_ms: i32) -> [bool
         return [false; 4];
     }
     poll.map(|p| p.fd >= 0 && p.revents & libc::POLLIN != 0)
+}
+
+/// The terminal layout's first line: `host:~$ lock`, or `~$ lock` while
+/// the hostname is hidden.
+fn prompt_line(hostname: &str, word: &str) -> String {
+    if hostname.is_empty() {
+        format!("~$ {word}")
+    } else {
+        format!("{hostname}:~$ {word}")
+    }
 }
 
 fn main() {

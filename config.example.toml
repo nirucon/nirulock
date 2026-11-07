@@ -26,6 +26,10 @@ quotes = ["*"]
 # to a random cell on every key, so the length is never shown.
 prompt_echo = "count"
 
+# Show the machine's hostname under the clock. Off by default, so a locked
+# screen in a shared place does not name the machine.
+show_hostname = false
+
 # Optional: use a specific runic font. The runic layout omits its ornament if
 # no rune font is available; it never draws missing-glyph boxes.
 # rune_font_path = "/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf"
