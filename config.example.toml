@@ -34,6 +34,19 @@ show_hostname = false
 # no rune font is available; it never draws missing-glyph boxes.
 # rune_font_path = "/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf"
 
+# Pause music: Commodore 64 SID tunes while the screen is locked. Off by
+# default. Needs sidplayfp. Starts only when no other audio plays in the first
+# seconds after locking; Esc, unlock, suspend and (by default) the display
+# going off stop it for the rest of the lock.
+[pause_music]
+enabled = false
+# .sid files, searched recursively and played in natural order (1-, 2-, 10-).
+folder = "~/Music/SID"
+# Seconds per tune, unless the HVSC Songlengths.md5 in the folder (or its
+# DOCUMENTS directory) knows the length.
+track_seconds = 180
+stop_on_display_off = true
+
 [palette]
 background = "000000"
 foreground = "e5e5e5"

@@ -34,6 +34,9 @@ unlocked screen.
 - Password-length hiding with `prompt_echo = "pulse"`.
 - Every copy of the password is wiped after use; nothing about keys is logged.
 - Optional NIRUX sounds through NIRUNOTIFY (`auth-fail`, `lock`, `unlock`).
+- Optional pause music (`[pause_music]`, off by default): Commodore 64 SID
+  tunes from `~/Music/SID` through `sidplayfp` while the screen is locked and
+  nothing else is playing. Esc stops it.
 
 ## Requirements
 
@@ -43,6 +46,9 @@ unlocked screen.
   PipeWire (`pipewire-pulse`) or PulseAudio for music detection,
   libxkbcommon/libxkbcommon-x11 for full keyboard handling, a runic font for
   the `runic` layout.
+- Optional, for `[pause_music]`: `sidplayfp` (Debian `sidplayfp`, Void
+  `sidplayfp`, Arch: the AUR package `sidplayfp` on top of `libsidplayfp` from
+  `extra`) and `dbus-monitor` (stops the music before suspend).
 - Building from source: Rust 1.75 or newer, a C linker, PAM development
   headers and a monospace font.
 
@@ -88,7 +94,8 @@ suspends. `niruidle` locks automatically after the screensaver (see `[idle]`
 in the NIRUWM config).
 
 On the lock screen: type the password and press Enter. Escape clears the
-entry; Backspace first cancels a pending dead key.
+entry (and stops the pause music for the rest of this lock); Backspace first
+cancels a pending dead key.
 
 ### Layouts
 
@@ -122,6 +129,28 @@ in `~/.config/niru/quotes/`, shared with NIRUSCREENSAVER; see
 sources of the built-in collections. How the spectrum and music detection
 work is described in [docs/BEHAVIOUR.md](docs/BEHAVIOUR.md).
 
+### Pause music
+
+With `[pause_music] enabled = true`, the lock plays Commodore 64 SID tunes
+while it is shown. It waits 2 seconds after locking (up to 5 while an idle
+stream is present) and starts only if no other audio played in that time and
+the folder holds `.sid` files. The tunes play in natural order (`1-`, `2-`,
+`10-`), looping, each for its length from the HVSC `Songlengths.md5` when that
+file is in the folder (or its `DOCUMENTS` directory), otherwise for
+`track_seconds`. While the spectrum is shown it visualises the tune.
+
+A subtle line under the clock or panel names the tune from its PSID/RSID
+header: `♪ Title — Author · Year  ·  Esc stops the music`.
+
+The music stops, and stays stopped for the rest of the lock, on unlock, on
+Esc, before suspend and (unless `stop_on_display_off = false`) when the display
+goes off. The player is an ordinary `sidplayfp` child process in its own
+process group with no input; nothing typed on the lock screen reaches it, and
+the lock never waits for it. It cannot unlock anything: authentication is
+untouched. Without `sidplayfp` the lock logs one line and stays silent. Put your
+own tunes in the folder; none are shipped. Details are in
+[docs/BEHAVIOUR.md](docs/BEHAVIOUR.md#pause-music-pause_music).
+
 ## Configuration
 
 Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
@@ -138,6 +167,12 @@ font_size = 22.0
 # font_path = "/path/to/font.ttf"
 # rune_font_path = "/path/to/runic.ttf"
 
+[pause_music]              # off by default
+enabled = false
+folder = "~/Music/SID"     # .sid files, searched recursively
+track_seconds = 180        # per tune without Songlengths.md5 (5 to 3600)
+stop_on_display_off = true
+
 [palette]                  # optional overrides; normally the NIRUX theme decides
 background = "000000"
 foreground = "e5e5e5"
@@ -152,6 +187,7 @@ background stays opaque.
 |---|---|
 | `~/.config/niruui/lock.toml` | Lock settings |
 | `~/.config/niru/quotes/*.txt` | Quote collections (shared with NIRUSCREENSAVER) |
+| `~/Music/SID/` | Tunes for `[pause_music]` (the `folder` setting), optionally with `Songlengths.md5` |
 | `/etc/pam.d/nirulock` | PAM service |
 | `~/.local/state/nirulock/trace.log` | Diagnostics; never passwords, keycodes or modifiers |
 | `~/.local/bin/nirulock` | Program |
@@ -165,6 +201,9 @@ background stays opaque.
   (`./install.sh --check`) and read `~/.local/state/nirulock/trace.log`.
 - **No spectrum.** CAVA is not installed, `visual` is `quotes` or `none`, or
   (with `auto`) nothing is playing loud enough.
+- **No pause music.** Check `enabled = true`, that `sidplayfp` is installed and
+  the folder has `.sid` files; `trace.log` says why it did not start (for
+  example "other audio is playing").
 - **Suspend does not happen after `Super+Shift+Escape`.** Suspend waits for
   `_NIRU_LOCK_READY`; if the lock could not grab the keyboard, it is refused.
 - **Security note.** X11 cannot isolate a lock screen from hostile clients on

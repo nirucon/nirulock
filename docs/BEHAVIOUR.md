@@ -79,3 +79,55 @@ with a smaller size (down to half, at least 11 px) when it is long and an
 ellipsis when it still does not fit. Attributions are muted.
 
 The quote collections themselves are described in [QUOTES.md](QUOTES.md).
+
+## Pause music (`[pause_music]`)
+
+Off by default. When `enabled = true`, a `nirulock-music` thread scans
+`folder` (default `~/Music/SID`, recursively, at most six levels and 10,000
+files, hidden entries and symlinked directories skipped) and looks for
+`sidplayfp` on `PATH`, while the lock is already shown. The lock itself only
+reads atomics and a mutex-guarded info line; it never waits for the thread or
+the player.
+
+**Starting.** The start gate looks at what the audio detector hears from
+streams *other than the lock's own player*: sink inputs are matched to the
+player by `application.process.id`, so CAVA may visualise the tune while it
+never counts as other audio. Because the detector measures peaks on the sink's
+mix, other audio means "another stream is playing and the mix is loud"; with
+no other stream there is certainly none. The music starts when nothing else
+played during the first 2 s after locking, or after 5 s when a quiet stream
+(an idle synthesizer) is present but never loud. Any other music in that
+window means no pause music for this lock. A display that is off only holds
+the decision; if it stays off for 5 s, there is no music. If the folder has no
+tunes or `sidplayfp` is missing, the lock logs one line and stays silent.
+When `visual` is not `auto`, the music runs its own detector for the gate
+and drops it once the decision is made.
+
+**Playing.** The tunes play in natural order of their path (digit runs compare
+as numbers, letters without case), looping. Each runs as
+`sidplayfp -q -os -o<start song> -t<seconds> FILE`, where the length comes from
+the HVSC `Songlengths.md5` (by the MD5 of the whole file, or by an unambiguous
+file name) for the header's start song, otherwise `track_seconds`. A player
+that does not end on its own is stopped 3 s after that. A player that crashes
+just moves on to the next tune; five tunes in a row that end within a second
+end the music for this lock. The info line under the clock or panel comes from
+the PSID/RSID header (Latin-1, control characters removed): `♪ Title — Author ·
+Year  ·  Esc stops the music`, with the file name when the title is unknown.
+When the theme font has no `♪`, it is drawn from DejaVu Sans, or left out.
+
+**Isolation.** The player is a child of the lock owned by the same user (the
+lock has no privileges), in its own process group, with stdin, stdout and
+stderr on `/dev/null`, and `PR_SET_PDEATHSIG` set to `SIGKILL`, so it dies
+with the music thread even if the lock itself is killed. Its arguments are
+only a time, a subtune and a path: nothing typed on the lock screen reaches it
+or any log. Authentication, the grabs and the PAM service are unchanged; the
+music adds no way to dismiss the lock.
+
+**Stopping.** Unlock, Esc, suspend and (with `stop_on_display_off = true`, the
+default) the display going off send `SIGTERM` to the player's process group
+from the lock's event loop, which never blocks; the music thread follows with
+`SIGKILL` after 0.5 s and reaps the player. Suspend is seen through
+`dbus-monitor --system` watching logind's (or elogind's) `PrepareForSleep`;
+either value stops the music, and a gap between the boot and monotonic clocks
+catches a sleep that was not announced. Once stopped, the music stays stopped
+until the next lock.
