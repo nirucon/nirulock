@@ -3,6 +3,19 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.22.1 (2026-11-08)
+
+### Fixed
+
+- The CAVA spectrum no longer stutters. It was repainted on a 30 fps timer of
+  its own, which drifted against CAVA's clock (29.8 frames a second measured):
+  every second or so a frame was shown twice and another skipped, and each
+  frame was shown up to 34 ms late. Each CAVA frame is now painted as it
+  arrives, like NIRUAMP: no repeated or skipped frames, 0.1 ms from arrival
+  to paint. A 100 ms fallback keeps the silence pause and a dead child
+  noticed; silence, display-off and pause-music behaviour are unchanged.
+- `NIRU_CAVA_TRACE` lines carry the CAVA frame's sequence number and age.
+
 ## 0.22.0 (2026-11-08)
 
 ### Added

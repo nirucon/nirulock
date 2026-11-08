@@ -10,8 +10,10 @@
 //! show. With the display off (DPMS not `On`) the CAVA child is stopped and
 //! reaped and one static frame is drawn; it restarts as soon as the display
 //! is on again. While the display is on but every bar has been silent for
-//! two seconds, the 30 fps repaint stops after one flat frame, and the reader
-//! thread wakes the caller on the first non-silent sample. CAVA's own
+//! two seconds, the repaint stops after one flat frame, and the reader
+//! thread wakes the caller on the first non-silent sample. While there is
+//! sound the reader wakes the caller on every frame, which is painted at
+//! once (see [`next_frame`]): each CAVA frame is shown exactly once. CAVA's own
 //! `sleep_timer` stops its FFT during the same silence. The DPMS watch and
 //! the [`PowerGate`] state machine below are self-contained so that
 //! NIRUSCREENSAVER can copy this file verbatim.
@@ -62,14 +64,27 @@ channels = mono\n\
 [smoothing]\n\
 noise_reduction = 77\n";
 
+/// The latest complete CAVA frame: the raw bars, a count of the frames read
+/// so far (0 before the first) and when it arrived.
+#[derive(Clone, Default)]
+struct Latest {
+    bars: Vec<u16>,
+    seq: u64,
+    at: Option<Instant>,
+}
+
 /// A running CAVA child and the latest complete frame it produced.
 struct Visualizer {
     child: Child,
-    bars: Arc<Mutex<Vec<u16>>>,
+    latest: Arc<Mutex<Latest>>,
     stop: Arc<AtomicBool>,
     /// Set while the caller has stopped repainting for silence; the reader
-    /// then signals `wake` on the first non-silent frame.
+    /// then signals `wake` on the first non-silent frame instead of on every
+    /// frame.
     quiet: Arc<AtomicBool>,
+    /// Set by the reader when it signals `wake`, cleared by the caller once
+    /// it has drained it: at most one wake-up byte is ever pending.
+    signalled: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
     path: PathBuf,
 }
@@ -116,10 +131,12 @@ impl Visualizer {
             let _ = fs::remove_file(&path);
             return None;
         };
-        let bars = Arc::new(Mutex::new(Vec::new()));
+        let latest = Arc::new(Mutex::new(Latest::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let quiet = Arc::new(AtomicBool::new(false));
-        let thread_bars = Arc::clone(&bars);
+        let signalled = Arc::new(AtomicBool::new(false));
+        let thread_signalled = Arc::clone(&signalled);
+        let thread_latest = Arc::clone(&latest);
         let thread_stop = Arc::clone(&stop);
         let thread_quiet = Arc::clone(&quiet);
         let mut wake = wake;
@@ -146,11 +163,22 @@ impl Visualizer {
                     for (value, pair) in frame.iter_mut().zip(bytes.chunks_exact(2)) {
                         *value = u16::from_ne_bytes([pair[0], pair[1]]);
                     }
-                    if let Ok(mut guard) = thread_bars.lock() {
-                        guard.clear();
-                        guard.extend_from_slice(&frame);
+                    if let Ok(mut guard) = thread_latest.lock() {
+                        guard.bars.clear();
+                        guard.bars.extend_from_slice(&frame);
+                        guard.seq += 1;
+                        guard.at = Some(Instant::now());
                     }
-                    if !silent_frame(&frame) && thread_quiet.swap(false, Ordering::AcqRel) {
+                    // Every frame is painted when it arrives, so each one is
+                    // shown exactly once; during a silence pause only sound
+                    // wakes the caller.
+                    let signal = if silent_frame(&frame) {
+                        !thread_quiet.load(Ordering::Acquire)
+                    } else {
+                        thread_quiet.store(false, Ordering::Release);
+                        true
+                    };
+                    if signal && !thread_signalled.swap(true, Ordering::AcqRel) {
                         if let Some(wake) = wake.as_mut() {
                             let _ = wake.write(&[1]);
                         }
@@ -166,9 +194,10 @@ impl Visualizer {
         }
         Some(Self {
             child,
-            bars,
+            latest,
             stop,
             quiet,
+            signalled,
             reader,
             path,
         })
@@ -178,8 +207,8 @@ impl Visualizer {
         !self.stop.load(Ordering::Relaxed) && matches!(self.child.try_wait(), Ok(None))
     }
 
-    fn bars(&self) -> Vec<u16> {
-        self.bars
+    fn latest(&self) -> Latest {
+        self.latest
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default()
@@ -210,6 +239,9 @@ pub struct Cava {
     /// into each reader thread.
     wake: Option<(UnixStream, UnixStream)>,
     trace: Option<Trace>,
+    /// The sequence number and arrival of the raw frame shown last.
+    shown_seq: u64,
+    shown_at: Option<Instant>,
 }
 
 impl Cava {
@@ -229,6 +261,8 @@ impl Cava {
             gate: PowerGate::new(),
             wake,
             trace: Trace::from_env(),
+            shown_seq: 0,
+            shown_at: None,
         }
     }
 
@@ -236,28 +270,47 @@ impl Cava {
         wake.as_ref().and_then(|(_, write)| write.try_clone().ok())
     }
 
-    /// True while the spectrum should be repainted at 30 fps: a CAVA child
-    /// is believed to be running, the display is on and there is sound.
+    /// True while the spectrum should be repainted with every CAVA frame: a
+    /// CAVA child is believed to be running, the display is on and there is
+    /// sound.
     pub fn animating(&self) -> bool {
         self.visualizer.is_some() && self.gate.activity() == Activity::Live
     }
 
-    /// The descriptor to wait on while silent: readable on the first
-    /// non-silent sample.
+    /// When the spectrum needs its next repaint while [`Cava::animating`]:
+    /// now when a raw frame has arrived that is not shown yet, otherwise
+    /// [`STALL_AFTER`] after the last repaint (CAVA has stopped writing).
+    pub fn next_frame(&self) -> Instant {
+        let latest = self.visualizer.as_ref().map_or(0, |v| v.latest().seq);
+        next_frame(self.last, self.shown_seq, latest)
+    }
+
+    /// The descriptor to wait on while the display is on: readable when a
+    /// new frame arrives, and during a silence pause on the first non-silent
+    /// one only.
     pub fn wake_fd(&self) -> Option<RawFd> {
-        if self.gate.activity() != Activity::Silent {
+        if self.gate.activity() == Activity::DisplayOff {
             return None;
         }
         self.wake.as_ref().map(|(read, _)| read.as_raw_fd())
     }
 
-    /// Consume a wake-up from the reader and resume the 30 fps repaint.
+    /// Consume a wake-up from the reader; sound after a silence pause
+    /// resumes the repaint.
     pub fn woke(&mut self) {
         if let Some((read, _)) = self.wake.as_mut() {
             let mut buf = [0u8; 16];
             while matches!(read.read(&mut buf), Ok(n) if n > 0) {}
         }
-        self.gate.sample(false, Instant::now());
+        // Drained first: a frame stored after this signals again, and one
+        // stored before it is read by the repaint that follows.
+        let sound = self.visualizer.as_ref().is_some_and(|visualizer| {
+            visualizer.signalled.store(false, Ordering::Release);
+            !silent_frame(&visualizer.latest().bars)
+        });
+        if sound {
+            self.gate.sample(false, Instant::now());
+        }
     }
 
     /// Follow the display power state. Off stops and reaps the CAVA child;
@@ -288,17 +341,20 @@ impl Cava {
             return self.traced(now, 'O');
         }
         self.maintain(now);
-        let raw = self
+        let latest = self
             .visualizer
             .as_ref()
-            .map(Visualizer::bars)
+            .map(Visualizer::latest)
             .unwrap_or_default();
+        self.shown_seq = latest.seq;
+        self.shown_at = latest.at;
+        let raw = latest.bars;
         if self.gate.sample(silent_frame(&raw), now) && self.gate.activity() == Activity::Silent {
             if let Some(visualizer) = self.visualizer.as_ref() {
                 visualizer.quiet.store(true, Ordering::Release);
                 // A sample that arrived between the read above and the flag
                 // would otherwise be missed until the next one.
-                if !silent_frame(&visualizer.bars()) {
+                if !silent_frame(&visualizer.latest().bars) {
                     self.gate.sample(false, now);
                     visualizer.quiet.store(false, Ordering::Release);
                 }
@@ -322,7 +378,8 @@ impl Cava {
     /// The shown bars, written to the `NIRU_CAVA_TRACE` file when set.
     fn traced(&mut self, now: Instant, state: char) -> &[f32] {
         if let Some(trace) = self.trace.as_mut() {
-            trace.frame(now, state, self.spectrum.shown());
+            let age = self.shown_at.map(|at| now.saturating_duration_since(at));
+            trace.frame(now, state, self.shown_seq, age, self.spectrum.shown());
         }
         self.spectrum.shown()
     }
@@ -344,7 +401,10 @@ impl Cava {
 /// Optional per-frame record of the shown bar heights, for measuring motion
 /// and frame pacing: `NIRU_CAVA_TRACE=/path` appends one line per frame with
 /// the milliseconds since start, the activity (`L`ive, `S`ilent, display
-/// `O`ff) and the 48 heights. It holds nothing but those numbers.
+/// `O`ff), the sequence number of the raw CAVA frame shown (repeated and
+/// skipped frames show as equal or jumping numbers), how many milliseconds
+/// ago that frame arrived (`-` before the first) and the 48 heights. It holds
+/// nothing but those numbers.
 struct Trace {
     out: io::BufWriter<fs::File>,
     start: Instant,
@@ -366,9 +426,13 @@ impl Trace {
         })
     }
 
-    fn frame(&mut self, now: Instant, state: char, shown: &[f32]) {
+    fn frame(&mut self, now: Instant, state: char, seq: u64, age: Option<Duration>, shown: &[f32]) {
         let ms = now.saturating_duration_since(self.start).as_secs_f64() * 1000.0;
-        let mut line = format!("{ms:.3} {state}");
+        let age = age.map_or_else(
+            || "-".to_string(),
+            |age| format!("{:.3}", age.as_secs_f64() * 1000.0),
+        );
+        let mut line = format!("{ms:.3} {state} {seq} {age}");
         for value in shown {
             line.push_str(&format!(" {value:.4}"));
         }
@@ -532,6 +596,26 @@ impl Gain {
     }
 }
 
+/// With no new CAVA frame for this long the spectrum is repainted anyway, so
+/// the silence window and a dead child are still noticed.
+pub const STALL_AFTER: Duration = Duration::from_millis(100);
+
+/// The repaint cadence, free of I/O so that it can be tested: a frame is
+/// due at once when CAVA's latest frame (`latest`, counted from 1) is not the
+/// one shown last, else [`STALL_AFTER`] after the last repaint at `last`.
+/// Painting on arrival instead of on a timer of its own shows every frame
+/// exactly once: CAVA's 30 fps clock (29.8 frames a second measured) and a
+/// separate 30.000 fps timer drift apart, and the timer then repeats a frame
+/// every second or so and delays the rest by up to a frame.
+pub fn next_frame(last: Instant, shown: u64, latest: u64) -> Instant {
+    // 0 is a child that has not written yet, never a new frame.
+    if latest != shown && latest != 0 {
+        last
+    } else {
+        last + STALL_AFTER
+    }
+}
+
 /// How long every bar must stay silent before the repaint stops.
 pub const SILENCE_AFTER: Duration = Duration::from_secs(2);
 /// The DPMS state is polled at most this often when the server cannot send
@@ -541,7 +625,7 @@ pub const DPMS_POLL: Duration = Duration::from_secs(2);
 /// What the spectrum is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Activity {
-    /// Sound and a lit display: repaint at 30 fps.
+    /// Sound and a lit display: repaint with every CAVA frame (30 fps).
     Live,
     /// The display is on but there has been no sound for [`SILENCE_AFTER`]:
     /// one flat frame, then no repaints until a non-silent sample.
@@ -890,6 +974,56 @@ mod tests {
         assert_eq!(gate.activity(), Activity::DisplayOff);
         assert!(gate.display(true));
         assert_eq!(gate.activity(), Activity::Live);
+    }
+
+    #[test]
+    fn a_new_frame_is_due_at_once_and_a_stall_falls_back_to_a_timer() {
+        let last = Instant::now();
+        // A frame that is not shown yet is due now (or already overdue).
+        assert_eq!(next_frame(last, 4, 5), last);
+        assert_eq!(next_frame(last, 4, 7), last);
+        // A restarted child counts from 1 again: still a new frame.
+        assert_eq!(next_frame(last, 812, 1), last);
+        assert_eq!(next_frame(last, 812, 0), last + STALL_AFTER);
+        // Nothing new: wait, but not forever.
+        assert_eq!(next_frame(last, 5, 5), last + STALL_AFTER);
+        assert_eq!(next_frame(last, 0, 0), last + STALL_AFTER);
+        assert!(STALL_AFTER > Duration::from_millis(66));
+    }
+
+    /// CAVA at 29.8 frames a second against a 30.000 fps timer: the timer
+    /// repeats frames; painting on arrival shows each one exactly once.
+    #[test]
+    fn painting_on_arrival_never_repeats_or_skips_a_frame() {
+        let start = Instant::now();
+        let arrivals: Vec<Instant> = (1..=300u32)
+            .map(|n| start + Duration::from_secs_f64(f64::from(n) / 29.8))
+            .collect();
+        let latest_at = |t: Instant| arrivals.iter().filter(|a| **a <= t).count() as u64;
+        // The old independent timer.
+        let mut repeats = 0;
+        let mut shown = 0;
+        let mut t = start + Duration::from_millis(5);
+        while t < *arrivals.last().unwrap() {
+            let latest = latest_at(t);
+            repeats += u32::from(latest == shown);
+            shown = latest;
+            t += Duration::from_micros(33_333);
+        }
+        assert!(repeats >= 1, "the beat repeats frames");
+        // Paint on arrival: the loop wakes for each frame.
+        let mut shown = 0;
+        let mut last = start;
+        let mut painted = Vec::new();
+        for at in &arrivals {
+            let latest = latest_at(*at);
+            if next_frame(last, shown, latest) <= *at {
+                shown = latest;
+                last = *at;
+                painted.push(shown);
+            }
+        }
+        assert_eq!(painted, (1..=300).collect::<Vec<u64>>());
     }
 
     #[test]

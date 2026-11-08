@@ -41,7 +41,10 @@ cannot isolate the lock from hostile clients on the same display server.
 ## The CAVA spectrum
 
 The `cava` layout samples system audio through [CAVA](https://github.com/karlstav/cava)
-at 30 frames per second with the same smoothing as NIRUAMP. Between full lock
+at 30 frames per second with the same smoothing as NIRUAMP. Like NIRUAMP it
+paints each CAVA frame the moment it arrives, so every frame is shown exactly
+once and without delay (a separate 30 fps timer drifted against CAVA's clock
+and repeated or skipped a frame every second or so). Between full lock
 frames only the spectrum rectangle is repainted, and CopyArea exposures are
 disabled. The spectrum pauses whenever it cannot be seen or has nothing to
 show: with the display off (DPMS standby, suspend or off) CAVA is stopped and

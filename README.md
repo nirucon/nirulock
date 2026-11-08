@@ -230,8 +230,10 @@ sh tests/resource-check.sh target/release/nirulock
 ```
 
 `NIRU_CAVA_TRACE=/path/to/file` appends one line per spectrum frame (the
-milliseconds since start, `L`ive, `S`ilent or display `O`ff, and the 48 bar
-heights) for measuring motion and frame pacing; it records nothing else.
+milliseconds since start, `L`ive, `S`ilent or display `O`ff, the sequence
+number of the CAVA frame shown, how many milliseconds ago it arrived, and the
+48 bar heights) for measuring motion and frame pacing: a repeated or jumping
+sequence number is a repeated or skipped frame. It records nothing else.
 
 `tests/compose-unlock.sh` types a password with dead keys and keypad digits in
 its own Xvfb; run it as a disposable test account whose password is the
