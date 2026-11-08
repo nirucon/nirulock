@@ -28,7 +28,7 @@ use std::{
     os::unix::net::UnixStream,
     ptr,
     sync::{
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU8, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -126,9 +126,40 @@ impl AudioGate {
     }
 }
 
+/// What the detector hears from streams other than the excluded ones,
+/// given what it hears in all and how many other streams are playing
+/// (`None` before the first stream list).
+///
+/// Peaks come from the sink's mix, so they cannot be told apart by stream:
+/// without any other playing stream there is certainly no other audio, and
+/// with one the mix decides.
+pub fn other_heard(heard: Heard, other_streams: Option<usize>) -> Heard {
+    match other_streams {
+        Some(0) => Heard::Silent,
+        _ => heard,
+    }
+}
+
+/// Count the playing (not corked) streams in a stream list, in all and
+/// those that do not belong to an excluded process.
+pub fn count_streams(streams: &[(bool, Option<u32>)], excluded: &[u32]) -> (usize, usize) {
+    let playing = streams.iter().filter(|(corked, _)| !corked);
+    let all = playing.clone().count();
+    let other = playing
+        .filter(|(_, pid)| !pid.is_some_and(|pid| excluded.contains(&pid)))
+        .count();
+    (all, other)
+}
+
 /// State shared between the caller and the client thread.
 struct Shared {
     heard: AtomicU8,
+    /// Playing streams of processes that are not excluded; -1 unknown.
+    other: AtomicI64,
+    /// Processes whose streams are not "other audio" (the lock's own player).
+    excluded: Mutex<Vec<u32>>,
+    /// The exclusions changed: list the streams again.
+    requery: AtomicBool,
     enabled: AtomicBool,
     quit: AtomicBool,
     /// The running `pa_mainloop`, for `pa_mainloop_wakeup`; 0 when none.
@@ -149,6 +180,9 @@ impl Audio {
         let shared = Arc::new(Shared {
             // Undecided until the detector has looked.
             heard: AtomicU8::new(Heard::Listening as u8),
+            other: AtomicI64::new(-1),
+            excluded: Mutex::new(Vec::new()),
+            requery: AtomicBool::new(false),
             enabled: AtomicBool::new(true),
             quit: AtomicBool::new(false),
             mainloop: Mutex::new(0),
@@ -166,6 +200,21 @@ impl Audio {
 
     pub fn heard(&self) -> Heard {
         Heard::from_u8(self.shared.heard.load(Ordering::Acquire))
+    }
+
+    /// What is heard from processes that are not excluded: "is someone
+    /// else's music playing". See [`other_heard`].
+    pub fn other_heard(&self) -> Heard {
+        let other = usize::try_from(self.shared.other.load(Ordering::Acquire)).ok();
+        other_heard(self.heard(), other)
+    }
+
+    /// A handle that sets the processes whose streams do not count as other
+    /// audio. Their sound still counts for [`Audio::heard`], so CAVA shows it.
+    pub fn exclusions(&self) -> Exclusions {
+        Exclusions {
+            shared: Arc::clone(&self.shared),
+        }
     }
 
     /// Pause (display off) or resume the detector. Paused, it keeps only its
@@ -188,6 +237,31 @@ impl Audio {
         }
         if let Some(thread) = self.thread.as_ref() {
             thread.unpark();
+        }
+    }
+}
+
+/// See [`Audio::exclusions`]. Usable from any thread.
+#[derive(Clone)]
+pub struct Exclusions {
+    shared: Arc<Shared>,
+}
+
+impl Exclusions {
+    pub fn set(&self, pids: &[u32]) {
+        if let Ok(mut excluded) = self.shared.excluded.lock() {
+            if excluded.as_slice() == pids {
+                return;
+            }
+            *excluded = pids.to_vec();
+        }
+        self.shared.requery.store(true, Ordering::Release);
+        let wakeup = self.shared.wakeup.lock().ok().and_then(|w| *w);
+        if let (Some(wakeup), Ok(mainloop)) = (wakeup, self.shared.mainloop.lock()) {
+            if *mainloop != 0 {
+                // SAFETY: as in Audio::poke.
+                unsafe { wakeup(*mainloop as *mut c_void) };
+            }
         }
     }
 }
@@ -307,6 +381,7 @@ struct Pulse {
     context_get_sink_input_info_list:
         unsafe extern "C" fn(*mut Context, Option<SinkInputCb>, *mut c_void) -> *mut c_void,
     operation_unref: unsafe extern "C" fn(*mut c_void),
+    proplist_gets: unsafe extern "C" fn(*const c_void, *const c_char) -> *const c_char,
     stream_new: unsafe extern "C" fn(
         *mut Context,
         *const c_char,
@@ -370,6 +445,7 @@ impl Pulse {
                 context_subscribe: sym!("pa_context_subscribe"),
                 context_get_sink_input_info_list: sym!("pa_context_get_sink_input_info_list"),
                 operation_unref: sym!("pa_operation_unref"),
+                proplist_gets: sym!("pa_proplist_gets"),
                 stream_new: sym!("pa_stream_new"),
                 stream_connect_record: sym!("pa_stream_connect_record"),
                 stream_set_read_callback: sym!("pa_stream_set_read_callback"),
@@ -393,8 +469,12 @@ struct Session<'a> {
     stream: *mut Stream,
     /// Streams that are not corked, from the last complete list.
     playing_streams: usize,
-    /// Count in progress while a list query runs.
-    counting: usize,
+    /// Of those, the streams of processes that are not excluded.
+    other_streams: usize,
+    /// Count in progress while a list query runs: (corked, pid) per stream.
+    counting: Vec<(bool, Option<u32>)>,
+    /// The excluded processes, copied when a query starts.
+    excluded: Vec<u32>,
     querying: bool,
     /// A complete stream list has arrived since connecting.
     listed: bool,
@@ -432,15 +512,25 @@ unsafe extern "C" fn on_sink_input(
     if eol != 0 {
         // eol < 0 is an error; keep the last good count then.
         if eol > 0 {
-            session.playing_streams = session.counting;
+            (session.playing_streams, session.other_streams) =
+                count_streams(&session.counting, &session.excluded);
             session.listed = true;
         }
-        session.counting = 0;
+        session.counting.clear();
         session.querying = false;
         return;
     }
-    if !info.is_null() && (*info).corked == 0 {
-        session.counting += 1;
+    if !info.is_null() {
+        let pid = if (*info).proplist.is_null() {
+            None
+        } else {
+            let value =
+                (session.pa.proplist_gets)((*info).proplist, cstr!("application.process.id"));
+            (!value.is_null())
+                .then(|| std::ffi::CStr::from_ptr(value).to_str().ok()?.parse().ok())
+                .flatten()
+        };
+        session.counting.push(((*info).corked != 0, pid));
     }
 }
 
@@ -490,7 +580,7 @@ impl Session<'_> {
         }
         self.dirty = false;
         self.querying = true;
-        self.counting = 0;
+        self.counting.clear();
         let data = self as *mut Session as *mut c_void;
         let op =
             (self.pa.context_get_sink_input_info_list)(self.context, Some(on_sink_input), data);
@@ -565,6 +655,7 @@ fn publish(shared: &Shared, wake: &mut Option<UnixStream>, heard: Heard) {
 
 fn client(shared: &Shared, name: String, mut wake: Option<UnixStream>) {
     let Some(pa) = Pulse::open() else {
+        shared.other.store(0, Ordering::Release);
         publish(shared, &mut wake, Heard::Silent);
         return;
     };
@@ -576,6 +667,7 @@ fn client(shared: &Shared, name: String, mut wake: Option<UnixStream>) {
         let connected_at = Instant::now();
         // SAFETY: one connection at a time, all on this thread.
         unsafe { connection(&pa, shared, &name, &mut wake) };
+        shared.other.store(0, Ordering::Release);
         publish(shared, &mut wake, Heard::Silent);
         if shared.quit.load(Ordering::Acquire) {
             break;
@@ -608,7 +700,9 @@ unsafe fn connection(pa: &Pulse, shared: &Shared, name: &str, wake: &mut Option<
         context,
         stream: ptr::null_mut(),
         playing_streams: 0,
-        counting: 0,
+        other_streams: 0,
+        counting: Vec::new(),
+        excluded: Vec::new(),
         querying: false,
         listed: false,
         dirty: false,
@@ -640,6 +734,14 @@ unsafe fn connection(pa: &Pulse, shared: &Shared, name: &str, wake: &mut Option<
                     (pa.operation_unref)(op);
                 }
                 session.dirty = true;
+            }
+            if shared.requery.swap(false, Ordering::AcqRel) {
+                session.dirty = true;
+            }
+            if session.dirty && !session.querying {
+                if let Ok(excluded) = shared.excluded.lock() {
+                    session.excluded.clone_from(&excluded);
+                }
             }
             if session.dirty {
                 session.query();
@@ -678,6 +780,12 @@ unsafe fn connection(pa: &Pulse, shared: &Shared, name: &str, wake: &mut Option<
                     Heard::Silent
                 }
             };
+            let other = if session.listed {
+                session.other_streams as i64
+            } else {
+                -1
+            };
+            shared.other.store(other, Ordering::Release);
             publish(shared, wake, heard);
             // Sleep until libpulse has work, the gate's silence window ends,
             // the monitor may be retried, or the caller pokes the loop.
@@ -790,6 +898,22 @@ mod tests {
         assert!(!gate.reset());
         // A fresh start window afterwards.
         assert!(!gate.observe(true, t + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn the_locks_own_player_is_not_other_audio() {
+        let player = 4242;
+        // Only the player plays: CAVA may show it, but it is not other audio.
+        let (all, other) = count_streams(&[(false, Some(player))], &[player]);
+        assert_eq!((all, other), (1, 0));
+        assert_eq!(other_heard(Heard::Playing, Some(other)), Heard::Silent);
+        // A corked stream and a stream without a pid.
+        let streams = [(false, Some(player)), (true, Some(7)), (false, None)];
+        assert_eq!(count_streams(&streams, &[player]), (2, 1));
+        assert_eq!(count_streams(&streams, &[]), (2, 2));
+        // Someone else's music plays.
+        assert_eq!(other_heard(Heard::Playing, Some(1)), Heard::Playing);
+        assert_eq!(other_heard(Heard::Listening, None), Heard::Listening);
     }
 
     #[test]

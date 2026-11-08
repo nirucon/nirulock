@@ -103,6 +103,8 @@ pub struct Config {
     /// Draw the machine's hostname under the clock. Off by default, so a
     /// locked screen in a shared place does not name the machine.
     pub show_hostname: bool,
+    /// `[pause_music]`: SID tunes while locked (off by default).
+    pub pause_music: crate::music::Settings,
 }
 
 /// The built-in suite themes, for a component that does not carry the
@@ -273,6 +275,7 @@ impl Default for Config {
             prompt_echo: Echo::Count,
             lock_timeout_minutes: 0,
             show_hostname: false,
+            pause_music: crate::music::Settings::default(),
         }
     }
 }
@@ -389,6 +392,9 @@ impl Config {
         if let Some(enabled) = v.get("show_hostname").and_then(|x| x.as_bool()) {
             cfg.show_hostname = enabled;
         }
+        if let Some(table) = v.get("pause_music") {
+            cfg.pause_music = crate::music::Settings::from_value(table)?;
+        }
         if let Some(t) = v.get("palette").and_then(|x| x.as_table()) {
             let get = |name: &str, fallback: u32| -> u32 {
                 t.get(name)
@@ -446,7 +452,7 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nvisual: {}\nquotes: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)\nshow hostname: {}",
+            "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nvisual: {}\nquotes: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)\nshow hostname: {}\npause music: {}",
             config_file().display(),
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
@@ -458,6 +464,7 @@ impl Config {
             self.rune_font_path.as_deref().unwrap_or("auto"),
             self.lock_timeout_minutes,
             if self.show_hostname { "on" } else { "off" },
+            self.pause_music.describe(),
         )
     }
 }
@@ -572,6 +579,18 @@ mod tests {
         assert_eq!(p.focus, 0x040506);
         assert_eq!(p.background, 0x000000);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pause_music_is_off_unless_asked_for() {
+        assert!(!Config::default().pause_music.enabled);
+        assert!(Config::default().describe().ends_with("pause music: off"));
+        let v: toml::Value = "[pause_music]\nenabled = true".parse().unwrap();
+        let c = Config::from_value(&v).unwrap();
+        assert!(c.pause_music.enabled);
+        assert_eq!(c.pause_music.folder, "~/Music/SID");
+        let v: toml::Value = "[pause_music]\ntrack_seconds = 0".parse().unwrap();
+        assert!(Config::from_value(&v).is_err());
     }
 
     #[test]

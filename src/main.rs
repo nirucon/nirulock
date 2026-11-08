@@ -18,10 +18,12 @@ mod config;
 mod core;
 mod display;
 mod keyboard;
+mod music;
 mod palette;
 mod pam;
 mod quotes;
 mod secret;
+mod sid;
 mod sound;
 mod visual;
 
@@ -172,8 +174,19 @@ struct Lock {
     rune_renderer: Option<core::TextRenderer>,
     /// The `cava` layout's panel: the spectrum or a quote.
     visual: Option<visual::Visual>,
-    /// Display power, followed only while the panel is shown.
+    /// Display power, followed only while the panel or the music needs it.
     power: Option<cava::DisplayPower>,
+    /// `[pause_music]`, when enabled.
+    music: Option<music::Music>,
+    /// The music's own audio detector when the panel has none; dropped once
+    /// the start is decided.
+    music_audio: Option<audio::Audio>,
+    /// The info line of the tune that plays.
+    music_info: Option<String>,
+    info_renderer: core::TextRenderer,
+    /// The note for the info line from another font, when the theme font
+    /// has none.
+    note_renderer: Option<core::TextRenderer>,
     state: State,
     input: zeroize::Zeroizing<String>,
     started: Instant,
@@ -235,7 +248,24 @@ impl Lock {
                     &cfg.quotes,
                 )
             });
-        let power = visual.as_ref().map(|_| cava::DisplayPower::new(&surface.c));
+        // The music thread scans the folder and looks for sidplayfp itself;
+        // nothing here waits for it.
+        let music = cfg
+            .pause_music
+            .enabled
+            .then(|| music::Music::start(&cfg.pause_music))
+            .flatten();
+        let music_audio = (music.is_some() && visual.as_ref().and_then(|v| v.audio()).is_none())
+            .then(|| audio::Audio::start("nirulock", None));
+        let power =
+            (visual.is_some() || music.is_some()).then(|| cava::DisplayPower::new(&surface.c));
+        let info_size = (cfg.font_size * 0.8).max(8.0);
+        let info_renderer = renderer.at_size(info_size);
+        let note_renderer = (music.is_some() && !info_renderer.has_glyph(NOTE))
+            .then(core::find_note_font)
+            .flatten()
+            .and_then(|font| core::TextRenderer::new(&font, info_size, &setup).ok())
+            .filter(|r| r.has_glyph(NOTE));
         let rune_renderer = core::find_rune_font(cfg.rune_font_path.as_deref())
             .map(|font| core::TextRenderer::new(&font, cfg.font_size * 2.0, &setup))
             .transpose()?;
@@ -264,6 +294,11 @@ impl Lock {
             rune_renderer,
             visual,
             power,
+            music,
+            music_audio,
+            music_info: None,
+            info_renderer,
+            note_renderer,
             state: State::Prompt,
             input: secret::new_entry(),
             started: Instant::now(),
@@ -970,6 +1005,74 @@ impl Lock {
                 }
             }
         }
+        // The pause music's info line, subtle, under the clock or the panel.
+        let info_max = (width * 9 / 10).max(1);
+        if let Some(info) = self.fitted_info(info_max) {
+            let at = match self.cfg.layout {
+                config::Layout::Minimal | config::Layout::Runic => (None, mid - line * 3),
+                config::Layout::Terminal => (
+                    Some(left((width / 10).max(24))),
+                    top((height / 3).max(i32::from(line) * 4)).saturating_add(line * 4),
+                ),
+                config::Layout::Corner => (
+                    Some(left((width / 10).max(16))),
+                    top((width / 10).max(16) + i32::from(line)).saturating_add(line),
+                ),
+                config::Layout::Cava => {
+                    let spec_h = ((height as f32 * 0.16) as i32).clamp(96, 200) as u16;
+                    let spec_y =
+                        top(((height - i32::from(spec_h)) / 2 - i32::from(line) * 2).max(0));
+                    (
+                        None,
+                        spec_y
+                            .saturating_add(spec_h as i16)
+                            .saturating_add(line * 4 / 5),
+                    )
+                }
+            };
+            let (x, baseline) = match at {
+                (Some(x), baseline) => (x, baseline),
+                (None, baseline) => (
+                    centre.saturating_sub((self.info_width(&info) / 2) as i16),
+                    baseline,
+                ),
+            };
+            let s = &self.surface;
+            let mut text = info.as_str();
+            let mut x = x;
+            if let Some(rest) = info.strip_prefix(NOTE) {
+                if !self.info_renderer.has_glyph(NOTE) {
+                    text = rest;
+                    if let Some(note) = self.note_renderer.as_mut() {
+                        note.draw_left(
+                            &s.c,
+                            s.gc,
+                            s.back,
+                            s.depth,
+                            x,
+                            baseline,
+                            "♪",
+                            pal.muted,
+                            pal.background,
+                        )?;
+                        x = x.saturating_add(note.width("♪"));
+                    } else {
+                        text = rest.trim_start();
+                    }
+                }
+            }
+            self.info_renderer.draw_left(
+                &s.c,
+                s.gc,
+                s.back,
+                s.depth,
+                x,
+                baseline,
+                text,
+                pal.muted,
+                pal.background,
+            )?;
+        }
         self.surface.present()?;
         Ok(())
     }
@@ -1050,6 +1153,9 @@ impl Lock {
         match outcome {
             Ok(outcome) if outcome.accepted => {
                 self.trace("password accepted");
+                // TERM to the player's process group; never waited for. The
+                // player also gets SIGKILL when this process exits.
+                self.stop_music("unlock");
                 // Accepted: give the keyboard back, then release the grabs so
                 // the session can continue.
                 let _ = self.tell_wm_locked(false);
@@ -1128,8 +1234,12 @@ impl Lock {
                 secret::erase_last(&mut self.input);
                 self.move_pulse();
             }
-            // Escape clears the entry; it never dismisses the lock.
-            keyboard::Key::Clear => secret::clear(&mut self.input),
+            // Escape clears the entry and stops the pause music for the rest
+            // of this lock; it never dismisses the lock.
+            keyboard::Key::Clear => {
+                secret::clear(&mut self.input);
+                self.stop_music("from the lock screen");
+            }
             keyboard::Key::Text(text) => {
                 secret::push(&mut self.input, text.as_str());
                 self.move_pulse();
@@ -1243,6 +1353,7 @@ impl Lock {
                 self.display_power(on);
                 repaint = true;
             }
+            repaint |= self.music_tick();
             // The panel follows the audio detector, the quotes loader and its
             // own fade and rotation timers; this reads atomics only.
             let mut panel_dirty = false;
@@ -1297,9 +1408,15 @@ impl Lock {
                         .map(|auth| auth.wake.as_raw_fd()),
                     cava_wake,
                     visual_wake,
+                    self.music.as_ref().and_then(music::Music::wake_fd),
                 ],
                 timeout,
             );
+            if ready[4] {
+                if let Some(music) = self.music.as_mut() {
+                    music.woke();
+                }
+            }
             if ready[2] || ready[3] {
                 if let Some(visual) = self.visual.as_mut() {
                     visual.woke([ready[2], ready[3]]);
@@ -1309,11 +1426,111 @@ impl Lock {
         }
     }
 
+    /// Stop the pause music for the rest of this lock. Never blocks.
+    fn stop_music(&mut self, why: &str) {
+        if let Some(music) = self.music.as_mut() {
+            let playing = music.info().is_some();
+            music.stop();
+            if playing {
+                self.trace(&format!("pause music stopped: {why}"));
+            }
+        }
+        self.music_audio = None;
+        self.music_info = None;
+    }
+
+    /// Follow the start gate and the info line. True when the screen needs
+    /// a repaint.
+    fn music_tick(&mut self) -> bool {
+        let Some(music) = self.music.as_mut() else {
+            return false;
+        };
+        let other = self
+            .visual
+            .as_ref()
+            .and_then(visual::Visual::audio)
+            .or(self.music_audio.as_ref())
+            .map_or(audio::Heard::Silent, audio::Audio::other_heard);
+        let exclusions = self
+            .visual
+            .as_ref()
+            .and_then(visual::Visual::audio)
+            .map(audio::Audio::exclusions);
+        // With stop_on_display_off = false the display state does not matter.
+        let display_on = !self.cfg.pause_music.stop_on_display_off
+            || self.power.as_ref().map_or(true, cava::DisplayPower::on);
+        let tick = music.tick(other, display_on, exclusions);
+        let info = music.info();
+        let stopped = music.stopped();
+        match tick {
+            music::Tick::Nothing => {}
+            music::Tick::Started => {
+                self.music_audio = None;
+                self.trace("pause music started");
+            }
+            music::Tick::Skipped(why) => {
+                self.music_audio = None;
+                self.trace(&format!("pause music not started: {why}"));
+            }
+        }
+        if info != self.music_info {
+            // Only the sleep watcher stops the music behind the lock's back;
+            // stop_music clears the line itself.
+            if info.is_none() && stopped {
+                self.trace("pause music stopped: before suspend");
+            }
+            self.music_info = info;
+            return true;
+        }
+        false
+    }
+
+    /// The info line's width. Without the note in the theme font it comes
+    /// from `note_renderer`, or is left out when no font has one.
+    fn info_width(&self, text: &str) -> i32 {
+        match text.strip_prefix(NOTE) {
+            Some(rest) if !self.info_renderer.has_glyph(NOTE) => {
+                match self.note_renderer.as_ref() {
+                    Some(note) => {
+                        i32::from(note.width("♪")) + i32::from(self.info_renderer.width(rest))
+                    }
+                    None => i32::from(self.info_renderer.width(rest.trim_start())),
+                }
+            }
+            _ => i32::from(self.info_renderer.width(text)),
+        }
+    }
+
+    /// The info line, shortened from the left part to fit `max` pixels.
+    fn fitted_info(&self, max: i32) -> Option<String> {
+        let info = self.music_info.as_ref()?;
+        if self.info_width(info) <= max {
+            return Some(info.clone());
+        }
+        let (head, tail) = info
+            .rsplit_once("  ·  ")
+            .map_or((info.as_str(), String::new()), |(h, t)| {
+                (h, format!("  ·  {t}"))
+            });
+        let mut head: Vec<char> = head.chars().collect();
+        while !head.is_empty() {
+            head.pop();
+            let text = format!("{}…{tail}", head.iter().collect::<String>().trim_end());
+            if self.info_width(&text) <= max {
+                return Some(text);
+            }
+        }
+        None
+    }
+
     /// Follow a display power change: stop or restart the spectrum, the
     /// audio detector and the quote changes.
     fn display_power(&mut self, on: bool) {
         if let Some(visual) = self.visual.as_mut() {
             visual.set_display(on);
+        }
+        if !on && self.cfg.pause_music.stop_on_display_off {
+            self.stop_music("display off");
         }
         self.trace(if on { "display on" } else { "display off" });
     }
@@ -1332,6 +1549,7 @@ impl Lock {
             self.wrong_until,
             self.power.as_ref().and_then(cava::DisplayPower::deadline),
             self.visual.as_ref().and_then(visual::Visual::deadline),
+            self.music.as_ref().and_then(music::Music::deadline),
         ]
         .into_iter()
         .flatten()
@@ -1343,22 +1561,25 @@ impl Lock {
     }
 }
 
+/// The pause music's note.
+const NOTE: char = '♪';
+
 /// The spectrum's frame interval: CAVA produces 30 frames per second.
 const CAVA_FRAME: Duration = Duration::from_micros(33_333);
 
 /// Wait on X, the bounded authentication worker, the CAVA silence wake-up and
 /// the panel's detector/loader wake-up without periodic polling. Returns which
 /// descriptors became readable.
-fn wait_readable(fds: [Option<std::os::fd::RawFd>; 4], timeout_ms: i32) -> [bool; 4] {
+fn wait_readable(fds: [Option<std::os::fd::RawFd>; 5], timeout_ms: i32) -> [bool; 5] {
     let mut poll = fds.map(|fd| libc::pollfd {
         fd: fd.unwrap_or(-1),
         events: libc::POLLIN,
         revents: 0,
     });
-    // SAFETY: four valid pollfd values; poll ignores a negative unused fd.
+    // SAFETY: five valid pollfd values; poll ignores a negative unused fd.
     let n = unsafe { libc::poll(poll.as_mut_ptr(), poll.len() as libc::nfds_t, timeout_ms) };
     if n <= 0 {
-        return [false; 4];
+        return [false; 5];
     }
     poll.map(|p| p.fd >= 0 && p.revents & libc::POLLIN != 0)
 }

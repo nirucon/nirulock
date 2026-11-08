@@ -85,6 +85,11 @@ impl TextRenderer {
         }
     }
 
+    /// True when the font has a glyph for `ch` (not the missing-glyph box).
+    pub fn has_glyph(&self, ch: char) -> bool {
+        self.font.glyph_id(ch).0 != 0
+    }
+
     /// Width of a string, using the font's advances.
     pub fn width(&self, text: &str) -> i16 {
         let scaled = self.font.as_scaled(ab_glyph::PxScale::from(self.size));
@@ -513,6 +518,31 @@ pub fn find_font(explicit: Option<&str>) -> String {
         }
     }
     String::new()
+}
+
+/// A proportional font with the music note (U+266A) for the pause music's
+/// info line, when the theme's monospace font has none.
+pub fn find_note_font() -> Option<String> {
+    if let Ok(out) = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", "DejaVu Sans:charset=266a"])
+        .output()
+    {
+        if out.status.success() {
+            let path = String::from_utf8_lossy(&out.stdout).to_string();
+            if std::path::Path::new(&path).is_file() {
+                return Some(path);
+            }
+        }
+    }
+    [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu-fonts-ttf/DejaVuSans.ttf",
+    ]
+    .iter()
+    .find(|candidate| std::path::Path::new(candidate).is_file())
+    .map(|candidate| candidate.to_string())
 }
 
 /// Pick an optional runic font. The lock/saver never requires one: if it is

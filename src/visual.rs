@@ -410,6 +410,11 @@ impl Visual {
         visual
     }
 
+    /// The audio detector, when the panel runs one (`visual = "auto"`).
+    pub fn audio(&self) -> Option<&Audio> {
+        self.audio.as_ref()
+    }
+
     /// True while the spectrum is live (sound, display on, not fading).
     pub fn cava_live(&self) -> bool {
         self.panel.shown() == Content::Cava && self.cava.as_ref().is_some_and(Cava::animating)
