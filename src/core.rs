@@ -90,16 +90,95 @@ impl TextRenderer {
         self.font.glyph_id(ch).0 != 0
     }
 
-    /// Width of a string, using the font's advances.
-    pub fn width(&self, text: &str) -> i16 {
-        let scaled = self.font.as_scaled(ab_glyph::PxScale::from(self.size));
-        text.chars()
-            .map(|c| scaled.h_advance(self.font.glyph_id(c)))
-            .sum::<f32>()
+    /// Ascent above the baseline, in whole pixels.
+    pub fn ascent(&self) -> i16 {
+        self.font
+            .as_scaled(ab_glyph::PxScale::from(self.size))
+            .ascent()
             .ceil() as i16
     }
 
-    /// Draw text centred on `centre_x`, with the baseline at `baseline`.
+    /// Descent below the baseline, in whole pixels (positive).
+    pub fn descent(&self) -> i16 {
+        (-self
+            .font
+            .as_scaled(ab_glyph::PxScale::from(self.size))
+            .descent())
+        .ceil() as i16
+    }
+
+    /// Where each glyph's pen starts, relative to the start of the line, in
+    /// whole pixels. The pen moves by the exact (fractional) advances and
+    /// kerning and is rounded per glyph, so the drawn line is exactly as
+    /// wide as [`TextRenderer::width`] says; rounding every advance up made
+    /// long lines drift right of their measured centre.
+    fn pens(&self, text: &str) -> Vec<(char, i32)> {
+        let scaled = self.font.as_scaled(ab_glyph::PxScale::from(self.size));
+        let mut pen = 0.0f32;
+        let mut previous = None;
+        let mut out = Vec::with_capacity(text.len());
+        for ch in text.chars() {
+            let id = self.font.glyph_id(ch);
+            if let Some(previous) = previous {
+                pen += scaled.kern(previous, id);
+            }
+            out.push((ch, pen.round() as i32));
+            pen += scaled.h_advance(id);
+            previous = Some(id);
+        }
+        out
+    }
+
+    /// Width of a string, using the font's advances and kerning.
+    pub fn width(&self, text: &str) -> i16 {
+        let scaled = self.font.as_scaled(ab_glyph::PxScale::from(self.size));
+        let mut total = 0.0f32;
+        let mut previous = None;
+        for ch in text.chars() {
+            let id = self.font.glyph_id(ch);
+            if let Some(previous) = previous {
+                total += scaled.kern(previous, id);
+            }
+            total += scaled.h_advance(id);
+            previous = Some(id);
+        }
+        total.ceil().clamp(0.0, f32::from(i16::MAX)) as i16
+    }
+
+    /// The inked box of `text` drawn from pen 0 on baseline 0:
+    /// `(left, top, right, bottom)` in pixels, top negative above the
+    /// baseline. `None` for text without ink (empty or only spaces).
+    /// Centring on this box, not on the advance width, keeps lines with a
+    /// trailing space ("password: ") or wide side bearings optically centred.
+    pub fn ink(&mut self, text: &str) -> Option<(i32, i32, i32, i32)> {
+        let mut out: Option<(i32, i32, i32, i32)> = None;
+        for (ch, pen) in self.pens(text) {
+            let mask = self.mask(ch);
+            if mask.width == 0 || mask.height == 0 {
+                continue;
+            }
+            let left = pen + i32::from(mask.x);
+            let top = i32::from(mask.y);
+            let right = left + i32::from(mask.width);
+            let bottom = top + i32::from(mask.height);
+            out = Some(match out {
+                None => (left, top, right, bottom),
+                Some((l, t, r, b)) => (l.min(left), t.min(top), r.max(right), b.max(bottom)),
+            });
+        }
+        out
+    }
+
+    /// The left pen position that centres the ink of `text` on `centre_x`.
+    pub fn centred_left(&mut self, centre_x: i16, text: &str) -> i16 {
+        let offset = match self.ink(text) {
+            Some((left, _, right, _)) => (left + right) / 2,
+            None => i32::from(self.width(text)) / 2,
+        };
+        (i32::from(centre_x) - offset).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+    }
+
+    /// Draw text with its ink centred on `centre_x`, baseline at `baseline`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_centred(
         &mut self,
@@ -113,18 +192,8 @@ impl TextRenderer {
         fg: u32,
         bg: u32,
     ) -> crate::Result<()> {
-        let width = self.width(text);
-        self.draw_left(
-            c,
-            gc,
-            target,
-            depth,
-            centre_x - width / 2,
-            baseline,
-            text,
-            fg,
-            bg,
-        )
+        let left = self.centred_left(centre_x, text);
+        self.draw_left(c, gc, target, depth, left, baseline, text, fg, bg)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -140,18 +209,12 @@ impl TextRenderer {
         fg: u32,
         bg: u32,
     ) -> crate::Result<()> {
-        let mut pen = left_x;
-        for ch in text.chars() {
+        for (ch, pen) in self.pens(text) {
             let mask = self.mask(ch);
-            self.blend(c, gc, target, depth, &mask, pen, baseline, fg, bg)?;
-            pen = pen.saturating_add(self.advance(ch));
+            let x = (i32::from(left_x) + pen).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            self.blend(c, gc, target, depth, &mask, x, baseline, fg, bg)?;
         }
         Ok(())
-    }
-
-    fn advance(&self, ch: char) -> i16 {
-        let scaled = self.font.as_scaled(ab_glyph::PxScale::from(self.size));
-        scaled.h_advance(self.font.glyph_id(ch)).ceil() as i16
     }
 
     fn mask(&mut self, ch: char) -> Mask {

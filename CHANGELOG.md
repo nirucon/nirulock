@@ -3,6 +3,36 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.23.0 (2026-11-08)
+
+### Changed
+
+- The lock screen's layout is cleaner and properly centred. Same elements,
+  same colours and fonts:
+  - Every centred line is centred by its ink, measured from the glyphs. The
+    pen now follows the font's exact advances (and kerning) instead of
+    rounding each advance up, which pushed long lines right of their
+    measured centre (the clock by 5–8 px, quote lines by up to 4 px), and a
+    trailing space no longer pulls "password:" 3 px left.
+  - The `cava` layout is one column with an even vertical rhythm: clock,
+    hostname, panel, pause-music line, `locked`, entry, away time. The block
+    sits at the optical centre of the prompt output (47 % of its height).
+  - Rows that come and go are reserved: a failure or PAM message, the
+    failed-attempt count, Caps Lock and the pause-music line never move the
+    entry or anything above it. Typing never slides the entry either: the
+    label stays put and the echo grows to the right (`count` shows at most
+    32 stars).
+  - Long PAM messages wrap to two balanced lines in the text column and are
+    cut with an ellipsis after that; the music line and the hostname are
+    cut to the panel's width. Quote lines wrap evenly (no lone last word).
+  - The spectrum is centred on the text column and as wide as its bars, so
+    its guides end where the outer bars do.
+- The runic layout leaves its ornament out when no installed font has the
+  runes, instead of drawing missing-glyph boxes.
+
+CAVA pacing is unchanged (each frame painted as it arrives, `draw_cava_frame`
+with `present_rect`); input, PAM, grabs, Esc and pause music are untouched.
+
 ## 0.22.2 (2026-11-08)
 
 ### Fixed

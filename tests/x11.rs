@@ -465,3 +465,140 @@ fn timeout_cannot_unlock_and_rejected_input_stays_isolated() {
     connection.destroy_window(spy).unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+/// Horizontal bands of ink on the root window: (top, bottom, left, right).
+fn ink_bands(
+    c: &x11rb::rust_connection::RustConnection,
+    root: Window,
+) -> Vec<(i32, i32, i32, i32)> {
+    let geometry = c.get_geometry(root).unwrap().reply().unwrap();
+    let (w, h) = (i32::from(geometry.width), i32::from(geometry.height));
+    let image = c
+        .get_image(
+            ImageFormat::Z_PIXMAP,
+            root,
+            0,
+            0,
+            geometry.width,
+            geometry.height,
+            !0,
+        )
+        .unwrap()
+        .reply()
+        .unwrap();
+    let data = image.data;
+    let stride = data.len() / h as usize;
+    let lit = |x: i32, y: i32| {
+        let at = y as usize * stride + x as usize * 4;
+        // Text is drawn on the near-black theme background.
+        data[at..at + 3].iter().any(|&v| v > 40)
+    };
+    let mut bands: Vec<(i32, i32, i32, i32)> = Vec::new();
+    for y in 0..h {
+        let xs: Vec<i32> = (0..w).filter(|&x| lit(x, y)).collect();
+        let (Some(&left), Some(&right)) = (xs.first(), xs.last()) else {
+            continue;
+        };
+        match bands.last_mut() {
+            Some(band) if y - band.1 <= 3 => {
+                band.1 = y;
+                band.2 = band.2.min(left);
+                band.3 = band.3.max(right);
+            }
+            _ => bands.push((y, y, left, right)),
+        }
+    }
+    bands
+}
+
+#[test]
+#[ignore = "requires isolated X server, font and xdotool"]
+fn text_is_centred_by_its_ink_and_the_entry_never_moves() {
+    let directory =
+        std::env::temp_dir().join(format!("nirulock-x11-layout-{}", std::process::id()));
+    std::fs::create_dir_all(directory.join("config/niruui")).unwrap();
+    // No panel: only text, so every ink band is a line of text.
+    std::fs::write(
+        directory.join("config/niruui/lock.toml"),
+        "visual = \"none\"\n",
+    )
+    .unwrap();
+    let (c, screen) = x11rb::connect(None).unwrap();
+    let root = c.setup().roots[screen].root;
+    let width = i32::from(c.setup().roots[screen].width_in_pixels);
+    let _lock = Running(
+        Command::new(env!("CARGO_BIN_EXE_nirulock"))
+            .env("XDG_CONFIG_HOME", directory.join("config"))
+            .env("XDG_STATE_HOME", directory.join("state"))
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    lock_window(&c, root);
+    thread::sleep(Duration::from_millis(1500));
+    let idle = ink_bands(&c, root);
+    // Clock, locked, password:, away time.
+    assert!(idle.len() >= 4, "{idle:?}");
+    for band in &idle {
+        // Twice the ink centre, against the output's width: within 1 px.
+        let off = band.2 + band.3 + 1 - width;
+        assert!(
+            off.abs() <= 2,
+            "line {band:?} is off centre by {} px",
+            off as f32 / 2.0
+        );
+    }
+    // The block sits near the optical centre of the output.
+    let height = i32::from(c.setup().roots[screen].height_in_pixels);
+    let middle = (idle[0].0 + idle.last().unwrap().1) / 2;
+    assert!(
+        (middle - height / 2).abs() < height / 10,
+        "block middle {middle}"
+    );
+    let entry = idle[idle.len() - 2];
+
+    assert!(Command::new("xdotool")
+        .args(["type", "abcdef"])
+        .status()
+        .unwrap()
+        .success());
+    thread::sleep(Duration::from_millis(500));
+    let typing = ink_bands(&c, root);
+    assert_eq!(typing.len(), idle.len(), "{typing:?}");
+    // The label keeps its place; the echo grows to the right.
+    assert_eq!(
+        typing[idle.len() - 2].2,
+        entry.2,
+        "the entry slid while typing"
+    );
+    for (a, b) in idle.iter().zip(typing.iter()) {
+        assert_eq!(
+            (a.0, a.1),
+            (b.0, b.1),
+            "a line moved vertically while typing"
+        );
+    }
+
+    assert!(Command::new("xdotool")
+        .args(["key", "Return"])
+        .status()
+        .unwrap()
+        .success());
+    thread::sleep(Duration::from_secs(4));
+    let failed = ink_bands(&c, root);
+    // "1 failed attempt" appears in a reserved row below; nothing above moves.
+    assert!(failed.len() > idle.len(), "{failed:?}");
+    for (a, b) in idle.iter().zip(failed.iter()) {
+        assert_eq!(
+            (a.0, a.1, a.2),
+            (b.0, b.1, b.2),
+            "a line moved after a failed attempt"
+        );
+    }
+    let message = failed[idle.len()];
+    assert!(
+        (message.2 + message.3 + 1 - width).abs() <= 2,
+        "{message:?}"
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}

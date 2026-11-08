@@ -549,6 +549,31 @@ pub fn wrap(line: &str, max: i32, width: &mut dyn FnMut(&str) -> i32) -> Vec<Str
     out
 }
 
+/// [`wrap`] on as few lines, but as evenly long as possible: the narrowest
+/// width that still needs no more lines than `max` does. A centred quote
+/// then has no lone last word.
+pub fn balanced(line: &str, max: i32, width: &mut dyn FnMut(&str) -> i32) -> Vec<String> {
+    let greedy = wrap(line, max, width);
+    if greedy.len() < 2 {
+        return greedy;
+    }
+    let (mut low, mut high) = (1, max);
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if wrap(line, mid, width).len() <= greedy.len() {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let out = wrap(line, high, width);
+    if out.len() == greedy.len() {
+        out
+    } else {
+        greedy
+    }
+}
+
 /// Lay out `quote` in a box `max_w` by `max_h` pixels, trying `sizes` from
 /// the largest. `width(size, text)` and `line_height(size)` measure the font.
 /// At the smallest size a quote that still does not fit is cut, with an
@@ -612,12 +637,12 @@ fn wrapped(
     let body = quote
         .lines
         .iter()
-        .flat_map(|line| wrap(line, max_w, &mut measure))
+        .flat_map(|line| balanced(line, max_w, &mut measure))
         .collect();
     let by = quote
         .attribution
         .iter()
-        .flat_map(|line| wrap(line, max_w, &mut measure))
+        .flat_map(|line| balanced(line, max_w, &mut measure))
         .collect();
     (body, by)
 }
@@ -790,6 +815,23 @@ mod tests {
         assert_eq!(
             wrap("abcdefghijklmnop", 50, &mut width),
             vec!["abcdefghij", "klmnop"]
+        );
+    }
+
+    #[test]
+    fn balanced_lines_keep_the_count_and_leave_no_lone_word() {
+        let mut width = |t: &str| mono(10.0, t);
+        let line = "who seemed wise among strangers was found out once he began to talk.";
+        let greedy = wrap(line, 300, &mut width);
+        let even = balanced(line, 300, &mut width);
+        assert_eq!(greedy.len(), even.len());
+        assert!(even.iter().all(|l| mono(10.0, l) <= 300));
+        let lengths: Vec<i32> = even.iter().map(|l| mono(10.0, l)).collect();
+        let spread = lengths.iter().max().unwrap() - lengths.iter().min().unwrap();
+        assert!(spread <= 80, "{even:?}");
+        assert_eq!(
+            balanced("short", 300, &mut width),
+            vec!["short".to_string()]
         );
     }
 

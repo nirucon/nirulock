@@ -18,6 +18,7 @@ mod config;
 mod core;
 mod display;
 mod keyboard;
+mod layout;
 mod music;
 mod palette;
 mod pam;
@@ -87,6 +88,10 @@ fn failed_text(n: u32) -> String {
 
 /// Width of the `pulse` echo.
 const PULSE_CELLS: usize = 8;
+/// The most stars the `count` echo shows.
+const ENTRY_MAX_STARS: usize = 32;
+/// The runic layout's ornament.
+const RUNES: &str = "ᚠ  ᚢ  ᚦ  ᚨ  ᚱ  ᚲ  ᚷ  ᚹ";
 
 /// The entry as shown on the prompt line.
 ///
@@ -268,7 +273,15 @@ impl Lock {
             .filter(|r| r.has_glyph(NOTE));
         let rune_renderer = core::find_rune_font(cfg.rune_font_path.as_deref())
             .map(|font| core::TextRenderer::new(&font, cfg.font_size * 2.0, &setup))
-            .transpose()?;
+            .transpose()?
+            // fc-match always names some font; one without the runes would
+            // draw missing-glyph boxes, so the ornament is left out instead.
+            .filter(|rune| {
+                RUNES
+                    .chars()
+                    .filter(|c| *c != ' ')
+                    .all(|c| rune.has_glyph(c))
+            });
         let prompt_area = display::Area {
             x: 0,
             y: 0,
@@ -657,22 +670,36 @@ impl Lock {
             State::Prompt | State::Wrong => ("password: ", pal.foreground),
             State::Checking => ("checking... ", pal.muted),
         };
-        let dots = echo(self.cfg.prompt_echo, self.input.chars().count(), self.pulse);
-        let extras = self.status_lines(&pal);
+        let chars = self.input.chars().count();
         let step = line.saturating_mul(3) / 2;
         // The active layout next to the prompt when several are configured.
-        let password = match (self.state, self.keyboard.indicator()) {
-            (State::Checking, _) | (_, None) => format!("{label}{dots}"),
-            (_, Some(layout)) => format!("[{layout}] {label}{dots}"),
+        let indicator = match (self.state, self.keyboard.indicator()) {
+            (State::Checking, _) | (_, None) => String::new(),
+            (_, Some(layout)) => format!("[{layout}] "),
         };
+        // `count` shows at most this many stars; the line stays inside
+        // the column however long the password gets.
+        let shown = chars.min(ENTRY_MAX_STARS);
+        let password = format!(
+            "{indicator}{label}{}",
+            echo(self.cfg.prompt_echo, shown, self.pulse)
+        );
+        // The entry starts where the empty prompt is centred (its ink, so
+        // the trailing space does not count). The echo then grows to the
+        // right and "checking..." takes the label's place: nothing slides
+        // while typing, and the idle screen is centred.
+        let reference = format!(
+            "{}password:",
+            self.keyboard
+                .indicator()
+                .map(|l| format!("[{l}] "))
+                .unwrap_or_default()
+        );
         let width = i32::from(area.width);
         let height = i32::from(area.height);
-        let left = |offset: i32| {
-            (i32::from(area.x) + offset).clamp(i16::MIN as i32, i16::MAX as i32) as i16
-        };
-        let top = |offset: i32| {
-            (i32::from(area.y) + offset).clamp(i16::MIN as i32, i16::MAX as i32) as i16
-        };
+        let column = (width * 2 / 3).min(width - i32::from(line) * 3).max(1);
+        let left = |offset: i32| layout::clamp16(i32::from(area.x) + offset);
+        let top = |offset: i32| layout::clamp16(i32::from(area.y) + offset);
         let right = |offset: i32| left(width - offset);
         let draw = |renderer: &mut core::TextRenderer,
                     surface: &mut core::Surface,
@@ -691,6 +718,61 @@ impl Lock {
                 fg,
                 pal.background,
             )
+        };
+        let entry_x = {
+            let ink = self.renderer.ink(&reference).map(|(l, _, r, _)| (l, r));
+            let w = i32::from(self.renderer.width(&reference));
+            layout::clamp16(layout::entry_left(i32::from(centre), ink, w))
+        };
+        let entry = |renderer: &mut core::TextRenderer,
+                     surface: &mut core::Surface,
+                     baseline: i16|
+         -> Result<()> {
+            renderer.draw_left(
+                &surface.c,
+                surface.gc,
+                surface.back,
+                surface.depth,
+                entry_x,
+                baseline,
+                &password,
+                colour,
+                pal.background,
+            )
+        };
+        let cava_layout = (self.cfg.layout == config::Layout::Cava).then(|| {
+            let clock_ink = self.clock_renderer.ink("0123456789-:");
+            let metrics = layout::Metrics {
+                line: i32::from(line),
+                ascent: i32::from(self.renderer.ascent()),
+                descent: i32::from(self.renderer.descent()),
+                clock_ascent: clock_ink.map_or(i32::from(self.clock_renderer.ascent()), |i| -i.1),
+                clock_descent: clock_ink.map_or(0, |i| i.3.max(0)),
+                info_ascent: i32::from(self.info_renderer.ascent()),
+                info_descent: i32::from(self.info_renderer.descent()),
+            };
+            layout::cava(
+                area,
+                &metrics,
+                layout::Slots {
+                    hostname: self.cfg.show_hostname,
+                    music: self.music.is_some(),
+                },
+            )
+        });
+        let column = cava_layout.as_ref().map_or(column, |l| l.column);
+        let extras = {
+            let renderer = &self.renderer;
+            let mut measure = |text: &str| i32::from(renderer.width(text));
+            self.status_lines(&pal)
+                .into_iter()
+                .flat_map(|(text, fg)| {
+                    layout::fit(&text, column, layout::MESSAGE_LINES, &mut measure)
+                        .into_iter()
+                        .map(move |l| (l, fg))
+                })
+                .take(layout::STATUS_ROWS)
+                .collect::<Vec<_>>()
         };
         match self.cfg.layout {
             config::Layout::Minimal => {
@@ -722,13 +804,7 @@ impl Lock {
                     &core::away_text(away),
                     pal.border.max(pal.focus),
                 )?;
-                draw(
-                    &mut self.renderer,
-                    &mut self.surface,
-                    mid + line * 4,
-                    &password,
-                    colour,
-                )?;
+                entry(&mut self.renderer, &mut self.surface, mid + line * 4)?;
                 for (index, (text, fg)) in extras.iter().enumerate() {
                     draw(
                         &mut self.renderer,
@@ -743,61 +819,28 @@ impl Lock {
                 let x = left((width / 10).max(24));
                 let start = top((height / 3).max(i32::from(line) * 4));
                 let line_at = |index: i32| start.saturating_add(line.saturating_mul(index as i16));
-                self.renderer.draw_left(
-                    &self.surface.c,
-                    self.surface.gc,
-                    self.surface.back,
-                    self.surface.depth,
-                    x,
-                    line_at(0),
-                    &prompt_line(&hostname, "lock"),
-                    pal.muted,
-                    pal.background,
-                )?;
-                self.renderer.draw_left(
-                    &self.surface.c,
-                    self.surface.gc,
-                    self.surface.back,
-                    self.surface.depth,
-                    x,
-                    line_at(2),
-                    &clock,
-                    pal.foreground,
-                    pal.background,
-                )?;
-                self.renderer.draw_left(
-                    &self.surface.c,
-                    self.surface.gc,
-                    self.surface.back,
-                    self.surface.depth,
-                    x,
-                    line_at(3),
-                    &core::away_text(away),
-                    pal.border.max(pal.focus),
-                    pal.background,
-                )?;
-                self.renderer.draw_left(
-                    &self.surface.c,
-                    self.surface.gc,
-                    self.surface.back,
-                    self.surface.depth,
-                    x,
-                    line_at(5),
-                    "[ locked ]",
-                    pal.focus,
-                    pal.background,
-                )?;
-                self.renderer.draw_left(
-                    &self.surface.c,
-                    self.surface.gc,
-                    self.surface.back,
-                    self.surface.depth,
-                    x,
-                    line_at(7),
-                    &password,
-                    colour,
-                    pal.background,
-                )?;
+                let max = width - (width / 10).max(24) * 2;
+                let mut measure = |text: &str| i32::from(self.renderer.width(text));
+                let first = layout::ellipsize(&prompt_line(&hostname, "lock"), max, &mut measure);
+                for (index, text, fg) in [
+                    (0, first.as_str(), pal.muted),
+                    (2, clock.as_str(), pal.foreground),
+                    (3, core::away_text(away).as_str(), pal.border.max(pal.focus)),
+                    (5, "[ locked ]", pal.focus),
+                    (7, password.as_str(), colour),
+                ] {
+                    self.renderer.draw_left(
+                        &self.surface.c,
+                        self.surface.gc,
+                        self.surface.back,
+                        self.surface.depth,
+                        x,
+                        line_at(index),
+                        text,
+                        fg,
+                        pal.background,
+                    )?;
+                }
                 for (index, (text, fg)) in extras.iter().enumerate() {
                     self.renderer.draw_left(
                         &self.surface.c,
@@ -821,7 +864,7 @@ impl Lock {
                         self.surface.depth,
                         centre,
                         mid - line * 6,
-                        "ᚠ  ᚢ  ᚦ  ᚨ  ᚱ  ᚲ  ᚷ  ᚹ",
+                        RUNES,
                         pal.border.max(pal.focus),
                         pal.background,
                     )?;
@@ -854,13 +897,7 @@ impl Lock {
                     &core::away_text(away),
                     pal.border.max(pal.focus),
                 )?;
-                draw(
-                    &mut self.renderer,
-                    &mut self.surface,
-                    mid + line * 4,
-                    &password,
-                    colour,
-                )?;
+                entry(&mut self.renderer, &mut self.surface, mid + line * 4)?;
                 for (index, (text, fg)) in extras.iter().enumerate() {
                     draw(
                         &mut self.renderer,
@@ -900,13 +937,16 @@ impl Lock {
                     pal.background,
                 )?;
                 let away_text = core::away_text(away);
-                let away_width = self.renderer.width(&away_text);
+                let away_right = self
+                    .renderer
+                    .ink(&away_text)
+                    .map_or(i32::from(self.renderer.width(&away_text)), |i| i.2);
                 self.renderer.draw_left(
                     &self.surface.c,
                     self.surface.gc,
                     self.surface.back,
                     self.surface.depth,
-                    right_x.saturating_sub(away_width),
+                    layout::clamp16(i32::from(right_x) - away_right),
                     bottom_y,
                     &away_text,
                     pal.border.max(pal.focus),
@@ -919,13 +959,7 @@ impl Lock {
                     "locked",
                     pal.focus,
                 )?;
-                draw(
-                    &mut self.renderer,
-                    &mut self.surface,
-                    mid + line * 2,
-                    &password,
-                    colour,
-                )?;
+                entry(&mut self.renderer, &mut self.surface, mid + line * 2)?;
                 for (index, (text, fg)) in extras.iter().enumerate() {
                     draw(
                         &mut self.renderer,
@@ -937,76 +971,66 @@ impl Lock {
                 }
             }
             config::Layout::Cava => {
-                let spec_w = ((width as f32 * 0.58) as i32).clamp(320, 1100) as u16;
-                let spec_h = ((height as f32 * 0.16) as i32).clamp(96, 200) as u16;
-                let spec_x = left((width - i32::from(spec_w)) / 2);
-                let spec_y = top(((height - i32::from(spec_h)) / 2 - i32::from(line) * 2).max(0));
-                let clock_baseline = spec_y.saturating_sub(line * 2);
-                let host_baseline = spec_y.saturating_sub(line / 2);
+                let l = cava_layout.as_ref().expect("the cava layout was computed");
+                let y = layout::clamp16;
                 self.clock_renderer.draw_centred(
                     &self.surface.c,
                     self.surface.gc,
                     self.surface.back,
                     self.surface.depth,
                     centre,
-                    clock_baseline,
+                    y(l.clock),
                     &clock,
                     pal.foreground,
                     pal.background,
                 )?;
-                self.renderer.draw_centred(
-                    &self.surface.c,
-                    self.surface.gc,
-                    self.surface.back,
-                    self.surface.depth,
-                    centre,
-                    host_baseline,
-                    &hostname,
-                    pal.muted,
-                    pal.background,
-                )?;
-                if let Some(visual) = self.visual.as_mut() {
-                    let rect = (spec_x, spec_y, spec_w, spec_h);
-                    visual.paint(&self.surface, &pal, rect)?;
-                    self.spectrum_rect = Some(rect);
-                }
-                let below = spec_y
-                    .saturating_add(spec_h as i16)
-                    .saturating_add(line * 2);
-                draw(
-                    &mut self.renderer,
-                    &mut self.surface,
-                    below,
-                    "locked",
-                    pal.focus,
-                )?;
-                draw(
-                    &mut self.renderer,
-                    &mut self.surface,
-                    below + line * 2,
-                    &password,
-                    colour,
-                )?;
-                draw(
-                    &mut self.renderer,
-                    &mut self.surface,
-                    below + line * 4,
-                    &core::away_text(away),
-                    pal.border.max(pal.focus),
-                )?;
-                for (index, (text, fg)) in extras.iter().enumerate() {
+                if let Some(baseline) = l.hostname {
+                    let mut measure = |text: &str| i32::from(self.renderer.width(text));
+                    let host = layout::ellipsize(&hostname, l.column, &mut measure);
                     draw(
                         &mut self.renderer,
                         &mut self.surface,
-                        (below + line * 6).saturating_add(step.saturating_mul(index as i16)),
+                        y(baseline),
+                        &host,
+                        pal.muted,
+                    )?;
+                }
+                if let Some(visual) = self.visual.as_mut() {
+                    let rect = l.panel.x11();
+                    visual.paint(&self.surface, &pal, rect)?;
+                    self.spectrum_rect = Some(rect);
+                }
+                draw(
+                    &mut self.renderer,
+                    &mut self.surface,
+                    y(l.locked),
+                    "locked",
+                    pal.focus,
+                )?;
+                entry(&mut self.renderer, &mut self.surface, y(l.entry))?;
+                draw(
+                    &mut self.renderer,
+                    &mut self.surface,
+                    y(l.away),
+                    &core::away_text(away),
+                    pal.border.max(pal.focus),
+                )?;
+                for ((text, fg), baseline) in extras.iter().zip(l.status.iter()) {
+                    draw(
+                        &mut self.renderer,
+                        &mut self.surface,
+                        y(*baseline),
                         text,
                         *fg,
                     )?;
                 }
             }
         }
-        // The pause music's info line, subtle, under the clock or the panel.
-        let info_max = (width * 9 / 10).max(1);
+        // The pause music's info line, subtle: in its own slot under the
+        // panel, or under the clock.
+        let info_max = cava_layout.as_ref().map_or((width * 9 / 10).max(1), |l| {
+            l.panel.width.max(l.column * 3 / 4)
+        });
         if let Some(info) = self.fitted_info(info_max) {
             let at = match self.cfg.layout {
                 config::Layout::Minimal | config::Layout::Runic => (None, mid - line * 3),
@@ -1018,17 +1042,10 @@ impl Lock {
                     Some(left((width / 10).max(16))),
                     top((width / 10).max(16) + i32::from(line)).saturating_add(line),
                 ),
-                config::Layout::Cava => {
-                    let spec_h = ((height as f32 * 0.16) as i32).clamp(96, 200) as u16;
-                    let spec_y =
-                        top(((height - i32::from(spec_h)) / 2 - i32::from(line) * 2).max(0));
-                    (
-                        None,
-                        spec_y
-                            .saturating_add(spec_h as i16)
-                            .saturating_add(line * 4 / 5),
-                    )
-                }
+                config::Layout::Cava => (
+                    None,
+                    layout::clamp16(cava_layout.as_ref().and_then(|l| l.info).unwrap_or(0)),
+                ),
             };
             let (x, baseline) = match at {
                 (Some(x), baseline) => (x, baseline),
