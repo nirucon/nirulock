@@ -21,16 +21,15 @@ fail() { printf 'FAIL %s\n' "$1"; [ "$MODE" = baseline ] || exit 1; }
 mkdir -p "$TEST/bin" "$TEST/config" "$TEST/state"
 # 48 bars of 16 bits each.
 head -c 96 /dev/zero > "$TEST/zero"
-i=0; while [ "$i" -lt 96 ]; do printf '\200'; i=$((i + 1)); done > "$TEST/loud-a"
-i=0; while [ "$i" -lt 96 ]; do printf '\040'; i=$((i + 1)); done > "$TEST/loud-b"
 # Fixture CAVA: raw 16-bit frames at about 30 fps; silence unless $TEST/sound
-# exists, and then alternating levels so the bars keep moving.
+# exists, and then random levels so the bars keep moving. (Two alternating
+# levels would alias with the 200 ms screenshots: every frame is painted as it
+# arrives, so shots six frames apart showed the same image.)
 cat > "$TEST/bin/cava" <<HELPER
 #!/bin/sh
-n=0
 while :; do
   if [ -e "$TEST/sound" ]; then
-    n=\$((1 - n)); if [ \$n -eq 1 ]; then cat "$TEST/loud-a" || exit; else cat "$TEST/loud-b" || exit; fi
+    head -c 96 /dev/urandom || exit
   else
     cat "$TEST/zero" || exit
   fi
