@@ -1451,6 +1451,10 @@ impl Lock {
         }
         self.music_audio = None;
         self.music_info = None;
+        // Back to the quote now, unless other music is playing.
+        if let Some(visual) = self.visual.as_mut() {
+            visual.own_audio_stopped();
+        }
     }
 
     /// Follow the start gate and the info line. True when the screen needs

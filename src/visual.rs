@@ -369,6 +369,10 @@ pub struct Visual {
     deck: Deck,
     /// The last [`Visual::paint`], for the fade cadence.
     painted: Instant,
+    /// When the lock's own pause music was stopped, and whether the
+    /// detector has been rearmed since.
+    own_stopped: Option<Instant>,
+    rearmed: bool,
 }
 
 impl Visual {
@@ -410,6 +414,8 @@ impl Visual {
             repaint: false,
             deck: Deck::new(seed()),
             painted: now,
+            own_stopped: None,
+            rearmed: false,
         };
         visual.tick(now);
         visual
@@ -442,7 +448,17 @@ impl Visual {
 
     /// The next moment [`Visual::tick`] has work without any input.
     pub fn deadline(&self) -> Option<Instant> {
-        self.panel.deadline(Instant::now())
+        let panel = self.panel.deadline(Instant::now());
+        // The rearm and the end of the hold after the pause music stopped.
+        let own = self.own_stopped.and_then(|t| {
+            [t + REARM_AFTER, t + OWN_STOP_HOLD]
+                .into_iter()
+                .find(|at| *at > Instant::now())
+        });
+        match (panel, own) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Descriptors to wait on: the spectrum's silence wake-up and the
@@ -491,6 +507,22 @@ impl Visual {
         self.tick(now);
     }
 
+    /// The pause music (whose player the detector excludes) was stopped.
+    /// The detector's gate still says "playing" until its silence window
+    /// ends, so without this the spectrum lingered, flat, for about six
+    /// seconds before the quote returned. Now, see [`panel_heard`]: with no
+    /// other stream the panel fades to a quote at once; otherwise the
+    /// detector is rearmed once the player's sound is gone and other music
+    /// that is really playing keeps the spectrum, without a flicker.
+    /// NIRUSCREENSAVER has no pause music.
+    #[allow(dead_code)]
+    pub fn own_audio_stopped(&mut self) {
+        if self.own_stopped.is_none() {
+            self.own_stopped = Some(Instant::now());
+            self.tick(Instant::now());
+        }
+    }
+
     /// True once after a change that needs a single repaint.
     pub fn take_repaint(&mut self) -> bool {
         std::mem::take(&mut self.repaint)
@@ -502,7 +534,16 @@ impl Visual {
             self.quotes = quotes;
             self.deck.reset();
         }
-        let heard = self.audio.as_ref().map_or(Heard::Silent, Audio::heard);
+        if let (Some(stopped), Some(audio)) = (self.own_stopped, self.audio.as_ref()) {
+            if !self.rearmed && now >= stopped + REARM_AFTER {
+                self.rearmed = true;
+                audio.rearm();
+            }
+        }
+        let since_stop = self.own_stopped.map(|t| now.saturating_duration_since(t));
+        let heard = self.audio.as_ref().map_or(Heard::Silent, |audio| {
+            panel_heard(audio.heard(), audio.other_heard(), since_stop)
+        });
         let actions = self.panel.step(heard, !self.quotes.is_empty(), now);
         self.apply(actions);
     }
@@ -605,6 +646,30 @@ impl Visual {
                 )
             }
         }
+    }
+}
+
+/// After the pause music stopped: when the detector is rearmed (the
+/// player's last sound has left the sink by then), and how long the
+/// spectrum is held while the rearmed gate decides whether other music
+/// plays (its [`crate::audio::START_AFTER`] plus two peak reads).
+const REARM_AFTER: Duration = Duration::from_millis(250);
+const OWN_STOP_HOLD: Duration = Duration::from_millis(950);
+
+/// What the panel follows. `all` is the detector's verdict on the mix,
+/// `others` the same restricted to streams of other processes (silent when
+/// there are none), `since_stop` the time since the lock's own pause music
+/// was stopped.
+fn panel_heard(all: Heard, others: Heard, since_stop: Option<Duration>) -> Heard {
+    match since_stop {
+        None => all,
+        // Nothing else plays: back to the quote now.
+        Some(_) if others == Heard::Silent => Heard::Silent,
+        // Until the rearmed gate has decided, keep what is shown; a stale
+        // "playing" or a fresh "listening" must neither flash the quote in
+        // under other music nor keep the spectrum after it.
+        Some(d) if d < OWN_STOP_HOLD && all != Heard::Silent => Heard::Playing,
+        Some(_) => all,
     }
 }
 
@@ -754,6 +819,69 @@ mod tests {
         let a = panel.step(Heard::Silent, true, s + CAVA_OUT);
         assert!(a.stop_cava && a.new_quote);
         assert_eq!(panel.shown(), Content::Quote);
+    }
+
+    #[test]
+    fn stopping_the_pause_music_returns_to_a_quote_without_the_silence_window() {
+        let ms = |n| Some(Duration::from_millis(n));
+        // While the pause music plays, the mix drives the spectrum.
+        assert_eq!(
+            panel_heard(Heard::Playing, Heard::Silent, None),
+            Heard::Playing
+        );
+        // Esc with no other stream: the quote at once, though the gate
+        // still says playing.
+        assert_eq!(
+            panel_heard(Heard::Playing, Heard::Silent, ms(0)),
+            Heard::Silent
+        );
+        // Other streams (an idle synth, or music): hold while the rearmed
+        // gate decides, then follow it.
+        assert_eq!(
+            panel_heard(Heard::Playing, Heard::Playing, ms(100)),
+            Heard::Playing
+        );
+        assert_eq!(
+            panel_heard(Heard::Listening, Heard::Listening, ms(500)),
+            Heard::Playing
+        );
+        assert_eq!(
+            panel_heard(Heard::Listening, Heard::Listening, ms(1000)),
+            Heard::Listening
+        );
+        assert_eq!(
+            panel_heard(Heard::Playing, Heard::Playing, ms(1000)),
+            Heard::Playing
+        );
+        assert!(REARM_AFTER < OWN_STOP_HOLD && OWN_STOP_HOLD < crate::audio::STOP_AFTER);
+        // An idle synth: the panel fades to a quote within about a second.
+        let t = Instant::now();
+        let mut panel = Panel::new(Mode::Auto, true, t);
+        panel.step(Heard::Playing, true, t);
+        run(&mut panel, Heard::Playing, t, t + Duration::from_secs(1));
+        assert_eq!(panel.shown(), Content::Cava);
+        let esc = t + Duration::from_secs(2);
+        panel.step(
+            panel_heard(Heard::Playing, Heard::Listening, ms(0)),
+            true,
+            esc,
+        );
+        assert_eq!(panel.shown(), Content::Cava);
+        let after = esc + OWN_STOP_HOLD;
+        let heard = panel_heard(Heard::Listening, Heard::Listening, ms(950));
+        panel.step(heard, true, after);
+        let a = panel.step(heard, true, after + CAVA_OUT);
+        assert!(a.stop_cava && a.new_quote);
+        assert_eq!(panel.shown(), Content::Quote);
+        // Other music that really plays keeps the spectrum throughout.
+        let mut panel = Panel::new(Mode::Auto, true, t);
+        panel.step(Heard::Playing, true, t);
+        for step in 0..30u64 {
+            let h = panel_heard(Heard::Playing, Heard::Playing, ms(step * 100));
+            let a = panel.step(h, true, esc + Duration::from_millis(step * 100));
+            assert!(!a.stop_cava);
+        }
+        assert_eq!(panel.shown(), Content::Cava);
     }
 
     #[test]

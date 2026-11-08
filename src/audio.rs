@@ -160,6 +160,8 @@ struct Shared {
     excluded: Mutex<Vec<u32>>,
     /// The exclusions changed: list the streams again.
     requery: AtomicBool,
+    /// Forget the gate's decision: judge the mix afresh.
+    rearm: AtomicBool,
     enabled: AtomicBool,
     quit: AtomicBool,
     /// The running `pa_mainloop`, for `pa_mainloop_wakeup`; 0 when none.
@@ -183,6 +185,7 @@ impl Audio {
             other: AtomicI64::new(-1),
             excluded: Mutex::new(Vec::new()),
             requery: AtomicBool::new(false),
+            rearm: AtomicBool::new(false),
             enabled: AtomicBool::new(true),
             quit: AtomicBool::new(false),
             mainloop: Mutex::new(0),
@@ -223,6 +226,16 @@ impl Audio {
         if self.shared.enabled.swap(enabled, Ordering::AcqRel) != enabled {
             self.poke();
         }
+    }
+
+    /// Judge the mix afresh: the gate forgets that music was playing, so
+    /// only sound that is still loud for [`START_AFTER`] counts as playing.
+    /// For a source that stopped while the gate still held "playing" for
+    /// its silence window. NIRUSCREENSAVER does not use it.
+    #[allow(dead_code)]
+    pub fn rearm(&self) {
+        self.shared.rearm.store(true, Ordering::Release);
+        self.poke();
     }
 
     fn poke(&self) {
@@ -757,6 +770,9 @@ unsafe fn connection(pa: &Pulse, shared: &Shared, name: &str, wake: &mut Option<
             if want_monitor && session.stream.is_null() && retry_due {
                 session.stream_failed_at = None;
                 session.open_monitor();
+            }
+            if shared.rearm.swap(false, Ordering::AcqRel) {
+                gate.reset();
             }
             let heard = if !enabled {
                 gate.reset();

@@ -3,6 +3,23 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.23.1 (2026-11-08)
+
+### Fixed
+
+- Esc during the pause music now returns the panel to a quote promptly, as
+  when no music plays. The audio detector still heard "playing" for its
+  5 s silence window, so the spectrum lingered, flat, for about six seconds
+  (measured on othala) before the quote faded in. With no other stream the
+  quote now fades in at once. With other streams (an idle synthesizer, or
+  real music) the detector is rearmed once the player's last sound has
+  left, and the spectrum is held for under a second while it decides:
+  music that really plays keeps the spectrum without a flicker, and anything
+  else fades to the quote within about 1.3 s. A stopped player stays
+  excluded from "other audio", so its lingering stream cannot flip the
+  panel back. The info line already disappeared at once, and its row stays
+  reserved, so nothing moves.
+
 ## 0.23.0 (2026-11-08)
 
 ### Changed

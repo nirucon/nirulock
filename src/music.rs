@@ -668,9 +668,10 @@ fn player(
         };
         finish(shared, &mut child);
         if stop {
-            if let Some(exclusions) = exclusions.as_ref() {
-                exclusions.set(&[]);
-            }
+            // The stopped player stays excluded: its stream may outlive it
+            // by a moment in the sound server, and must not count as other
+            // music then (the panel would flip back to the spectrum). The
+            // music never starts again in this lock.
             let _ = notify.write(&[1]);
             return;
         }
