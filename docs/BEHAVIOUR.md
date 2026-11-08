@@ -119,7 +119,9 @@ Year  ·  Esc stops the music`, with the file name when the title is unknown.
 When the theme font has no `♪`, it is drawn from DejaVu Sans, or left out.
 
 **Isolation.** The player is a child of the lock owned by the same user (the
-lock has no privileges), in its own process group, with stdin, stdout and
+lock has no privileges), in its own session and process group without a
+controlling terminal (so its `/dev/tty` keyboard handling cannot stop it with
+SIGTTOU on a console-started session), with stdin, stdout and
 stderr on `/dev/null`, and `PR_SET_PDEATHSIG` set to `SIGKILL`, so it dies
 with the music thread even if the lock itself is killed. Its arguments are
 only a time, a subtune and a path: nothing typed on the lock screen reaches it

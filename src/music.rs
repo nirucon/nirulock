@@ -9,8 +9,12 @@
 //! Isolation from the lock:
 //!
 //! - The player is an ordinary child process of the user (the lock has no
-//!   privileges to drop), in its own process group, with stdin, stdout and
-//!   stderr on `/dev/null`. Its arguments are a time, a subtune and a path;
+//!   privileges to drop), in its own session and so its own process group,
+//!   without a controlling terminal, with stdin, stdout and stderr on
+//!   `/dev/null`. sidplayfp opens `/dev/tty` for its keyboard controls; on a
+//!   session started from a text console a background process group there
+//!   is stopped by SIGTTOU/SIGTTIN, which left the lock showing a tune while
+//!   nothing played. Its arguments are a time, a subtune and a path;
 //!   nothing typed on the lock screen ever reaches it.
 //! - Everything that touches the player (scanning, spawning, waiting,
 //!   killing) runs on the `nirulock-music` thread. The lock's event loop only
@@ -532,6 +536,9 @@ const MAX_TUNE_BYTES: u64 = 1 << 20;
 const GRACE: Duration = Duration::from_secs(3);
 /// How long the player gets to exit after TERM before KILL.
 const TERM_WAIT: Duration = Duration::from_millis(500);
+/// How long the player may stay stopped (SIGSTOP, SIGTTOU, ...) before the
+/// music gives up for this lock.
+const STOPPED_GIVE_UP: Duration = Duration::from_secs(2);
 /// After this many tunes in a row that end within a second, give up.
 const MAX_QUICK_FAILURES: usize = 5;
 
@@ -624,6 +631,7 @@ fn player(
         let _ = notify.write(&[1]);
         let deadline = started + Duration::from_secs(u64::from(seconds)) + GRACE;
         let mut last = clocks();
+        let mut stopped_since: Option<Instant> = None;
         let stop = loop {
             match receive.recv_timeout(Duration::from_millis(200)) {
                 Ok(Request::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break true,
@@ -641,6 +649,21 @@ fn player(
             }
             if !matches!(child.try_wait(), Ok(None)) || Instant::now() >= deadline {
                 break false;
+            }
+            // A player that is stopped plays nothing; do not show its tune.
+            if is_stopped(child.id()) {
+                let since = *stopped_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= STOPPED_GIVE_UP {
+                    eprintln!("nirulock: pause_music: sidplayfp was stopped by a signal; no music");
+                    finish(shared, &mut child);
+                    if let Some(exclusions) = exclusions.as_ref() {
+                        exclusions.set(&[]);
+                    }
+                    let _ = notify.write(&[1]);
+                    return;
+                }
+            } else {
+                stopped_since = None;
             }
         };
         finish(shared, &mut child);
@@ -680,13 +703,16 @@ fn spawn(program: &Path, file: &Path, seconds: u32, song: u16) -> std::io::Resul
         .arg(file)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0);
+        .stderr(Stdio::null());
     // SAFETY: only async-signal-safe calls between fork and exec.
     unsafe {
         command.pre_exec(move || {
-            // Dies with the music thread, and so with the lock.
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0
+            // A new session: no controlling terminal, so the player's own
+            // /dev/tty access cannot stop it, and its pid is its process
+            // group for `signal_group`. Dies with the music thread, and so
+            // with the lock.
+            if libc::setsid() < 0
+                || libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0
                 || libc::getppid() != parent
             {
                 libc::_exit(127);
@@ -695,6 +721,17 @@ fn spawn(program: &Path, file: &Path, seconds: u32, song: u16) -> std::io::Resul
         });
     }
     command.spawn()
+}
+
+/// True while process `pid` is stopped (state `T` or `t` in /proc).
+fn is_stopped(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(')')
+                .map(|(_, rest)| rest.trim_start().to_owned())
+        })
+        .is_some_and(|rest| rest.starts_with('T') || rest.starts_with('t'))
 }
 
 /// TERM, wait briefly, KILL, reap. Runs on the music thread only.
@@ -794,6 +831,56 @@ impl Drop for SleepWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fields 6 and 7 of /proc/PID/stat: the session id and the controlling
+    /// terminal (0 for none).
+    fn session_and_tty(pid: u32) -> (i64, i64) {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let rest: Vec<i64> = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .skip(1)
+            .take(6)
+            .map(|v| v.parse().unwrap())
+            .collect();
+        (rest[2], rest[3])
+    }
+
+    #[test]
+    fn the_player_runs_in_its_own_session_without_a_terminal() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("nirulock-music-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let player = dir.join("player");
+        std::fs::write(&player, "#!/bin/sh\nexec sleep 5\n").unwrap();
+        std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut child = spawn(&player, Path::new("tune.sid"), 5, 1).unwrap();
+        let pid = child.id();
+        // Wait for the exec.
+        let until = Instant::now() + Duration::from_secs(2);
+        while std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            .map_or(true, |c| c.trim() != "sleep")
+            && Instant::now() < until
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let (session, tty) = session_and_tty(pid);
+        assert_eq!(session, i64::from(pid), "the player leads its own session");
+        assert_eq!(tty, 0, "the player has no controlling terminal");
+        assert!(!is_stopped(pid));
+        // The pid is the process group, so the group signal reaches it.
+        signal_group(pid as i32, libc::SIGSTOP);
+        let until = Instant::now() + Duration::from_secs(2);
+        while !is_stopped(pid) && Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(is_stopped(pid));
+        signal_group(pid as i32, libc::SIGKILL);
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn at(t: Instant, ms: u64) -> Instant {
         t + Duration::from_millis(ms)

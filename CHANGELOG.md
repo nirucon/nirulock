@@ -3,6 +3,19 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.22.2 (2026-11-08)
+
+### Fixed
+
+- Pause music was silent on sessions started from a text console (void's
+  `startx` login) although the lock showed the tune. sidplayfp opens
+  `/dev/tty` for its keyboard controls, and as a background process group on
+  the session's controlling terminal it was stopped by SIGTTOU/SIGTTIN. The
+  player now starts in its own session without a controlling terminal
+  (`setsid`); its pid is still its process group, so stopping it is
+  unchanged. A player that stays stopped for 2 s is ended and the music gives
+  up for this lock instead of showing a tune that does not play.
+
 ## 0.22.1 (2026-11-08)
 
 ### Fixed

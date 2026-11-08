@@ -145,7 +145,7 @@ header: `♪ Title — Author · Year  ·  Esc stops the music`.
 The music stops, and stays stopped for the rest of the lock, on unlock, on
 Esc, before suspend and (unless `stop_on_display_off = false`) when the display
 goes off. The player is an ordinary `sidplayfp` child process in its own
-process group with no input; nothing typed on the lock screen reaches it, and
+session (no controlling terminal) with no input; nothing typed on the lock screen reaches it, and
 the lock never waits for it. It cannot unlock anything: authentication is
 untouched. Without `sidplayfp` the lock logs one line and stays silent. Put your
 own tunes in the folder; none are shipped. Details are in
