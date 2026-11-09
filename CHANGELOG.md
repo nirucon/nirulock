@@ -3,7 +3,11 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
-## 0.24.0 (2026-11-09)
+## 0.25.0 (2026-11-09)
+
+There is no 0.24.0 release: its tag was pushed by mistake on the 0.23.1
+commit and its release build was cancelled. 0.25.0 is the first release with
+these changes.
 
 ### Changed
 
