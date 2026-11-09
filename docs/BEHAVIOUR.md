@@ -85,12 +85,23 @@ The quote collections themselves are described in [QUOTES.md](QUOTES.md).
 
 ## Pause music (`[pause_music]`)
 
-Off by default. When `enabled = true`, a `nirulock-music` thread scans
+Off by default. When `enabled = true`, and the lock's reason (`--reason` or
+`NIRULOCK_REASON`; see the README's Usage) is in `on` (default `["manual"]`),
+a `nirulock-music` thread scans
 `folder` (default `~/Music/SID`, recursively, at most six levels and 10,000
 files, hidden entries and symlinked directories skipped) and looks for
 `sidplayfp` on `PATH`, while the lock is already shown. The lock itself only
 reads atomics and a mutex-guarded info line; it never waits for the thread or
 the player.
+
+**Why the lock was started.** For any other reason (idle, suspend, script,
+session, or a caller that gave none) the music thread is not started at all:
+no folder scan, no `sidplayfp`, no audio detector for the gate. The trace log
+says `pause music not started: lock reason idle`. The reason is read once at
+start, the variable is removed from the lock's environment so CAVA and the
+player do not inherit it, and an unknown or missing value is
+`unspecified`: the lock starts exactly as before, only without music. The
+reason never changes authentication, the grabs or how the lock is dismissed.
 
 **Starting.** The start gate looks at what the audio detector hears from
 streams *other than the lock's own player*: sink inputs are matched to the

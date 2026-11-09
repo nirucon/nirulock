@@ -3,6 +3,31 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.24.0 (2026-11-09)
+
+### Changed
+
+- The pause music plays only when you lock by hand. The lock now knows why
+  it was started: `nirulock --reason manual|idle|suspend|script|session`, or
+  the `NIRULOCK_REASON` environment variable for callers that must also work
+  with older releases (the argument wins). `[pause_music]` starts only for
+  the reasons in the new `on` setting, by default `["manual"]`. An idle lock,
+  the lock before suspend, a script's or SSH lock (`niructl lock --silent`)
+  and an older caller that gives no reason stay quiet; after a rollout locked
+  five machines at once, all five had started playing. Existing configs work
+  unchanged and get the new default. A missing or unknown reason never stops
+  the lock from starting; it only means no music. Esc still stops the music
+  and returns to the quote. Authentication, the grabs and PAM are unchanged.
+- `nirulock --help` describes the options. `--config` names the reasons the
+  music plays for.
+
+### Tests
+
+- `tests/pause-music-reason.sh` (in CI): in its own Xvfb with isolated XDG
+  directories, no sound server and a fake `sidplayfp`, the music starts for
+  `manual` (argument or environment) and the configured reasons only, never
+  without a reason, and Esc still stops it.
+
 ## 0.23.1 (2026-11-08)
 
 ### Fixed

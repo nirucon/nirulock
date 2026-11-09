@@ -1,6 +1,7 @@
 //! `[pause_music]`: C64 SID tunes while the screen is locked.
 //!
-//! Off by default. When enabled, the lock waits [`GATE_WINDOW`] after it is
+//! Off by default. When enabled, and only for the lock reasons in `on`
+//! (default: `manual`, see [`crate::reason`]), the lock waits [`GATE_WINDOW`] after it is
 //! shown and starts `sidplayfp` only if the folder has `.sid` files and no
 //! other audio played during that window ([`StartGate`]). The tunes play in
 //! natural order and loop, each for its HVSC `Songlengths.md5` length or
@@ -32,6 +33,7 @@
 //! stays stopped for the rest of this lock.
 
 use crate::audio::Heard;
+use crate::reason::Reason;
 use crate::sid;
 use std::{
     io::{BufRead, BufReader, Write},
@@ -54,6 +56,8 @@ pub struct Settings {
     pub folder: String,
     pub track_seconds: u32,
     pub stop_on_display_off: bool,
+    /// The lock reasons that may play; by default only a manual lock.
+    pub on: Vec<Reason>,
 }
 
 pub const DEFAULT_FOLDER: &str = "~/Music/SID";
@@ -66,6 +70,7 @@ impl Default for Settings {
             folder: DEFAULT_FOLDER.to_string(),
             track_seconds: DEFAULT_TRACK_SECONDS,
             stop_on_display_off: true,
+            on: vec![Reason::Manual],
         }
     }
 }
@@ -103,10 +108,16 @@ impl Settings {
                         .as_bool()
                         .ok_or("pause_music.stop_on_display_off must be true or false")?
                 }
+                "on" => s.on = reasons(value)?,
                 other => eprintln!("nirulock: pause_music: unknown setting {other:?} ignored"),
             }
         }
         Ok(s)
+    }
+
+    /// Whether a lock started for `reason` may play.
+    pub fn plays_for(&self, reason: Reason) -> bool {
+        self.enabled && self.on.contains(&reason)
     }
 
     pub fn folder_path(&self) -> PathBuf {
@@ -115,8 +126,15 @@ impl Settings {
 
     pub fn describe(&self) -> String {
         if self.enabled {
+            let on = if self.on.is_empty() {
+                "no locks (pause_music.on is empty)".to_string()
+            } else {
+                let names: Vec<&str> = self.on.iter().map(|r| r.name()).collect();
+                format!("{} locks", names.join(", "))
+            };
             format!(
-                "on (folder {}, {} s per tune without Songlengths.md5, {})",
+                "on for {} (folder {}, {} s per tune without Songlengths.md5, {})",
+                on,
                 self.folder,
                 self.track_seconds,
                 if self.stop_on_display_off {
@@ -129,6 +147,19 @@ impl Settings {
             "off".into()
         }
     }
+}
+
+/// `on = ["manual", ...]`: a list of lock reasons, duplicates ignored.
+fn reasons(value: &toml::Value) -> Result<Vec<Reason>, String> {
+    let wrong = || format!("pause_music.on must be a list of {}", Reason::names());
+    let mut out = Vec::new();
+    for item in value.as_array().ok_or_else(wrong)? {
+        let reason = item.as_str().and_then(Reason::parse).ok_or_else(wrong)?;
+        if !out.contains(&reason) {
+            out.push(reason);
+        }
+    }
+    Ok(out)
 }
 
 fn expand_home(folder: &str, home: Option<PathBuf>) -> PathBuf {
@@ -832,6 +863,53 @@ impl Drop for SleepWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings(text: &str) -> Result<Settings, String> {
+        Settings::from_value(&text.parse::<toml::Value>().unwrap()["pause_music"])
+    }
+
+    #[test]
+    fn only_a_manual_lock_plays_by_default() {
+        let s = settings("[pause_music]\nenabled = true").unwrap();
+        assert_eq!(s.on, vec![Reason::Manual]);
+        assert!(s.plays_for(Reason::Manual));
+        for r in [
+            Reason::Idle,
+            Reason::Suspend,
+            Reason::Script,
+            Reason::Session,
+            Reason::Unspecified,
+        ] {
+            assert!(!s.plays_for(r), "{r} must not play by default");
+        }
+        assert!(s.describe().starts_with("on for manual locks"));
+    }
+
+    #[test]
+    fn disabled_music_never_plays() {
+        let s = settings("[pause_music]\nenabled = false\non = [\"manual\", \"idle\"]").unwrap();
+        assert!(Reason::ALL.into_iter().all(|r| !s.plays_for(r)));
+        assert_eq!(s.describe(), "off");
+    }
+
+    #[test]
+    fn the_reasons_can_be_chosen() {
+        let s = settings("[pause_music]\nenabled = true\non = [\"idle\", \"Manual\", \"idle\"]")
+            .unwrap();
+        assert_eq!(s.on, vec![Reason::Idle, Reason::Manual]);
+        assert!(s.plays_for(Reason::Idle) && s.plays_for(Reason::Manual));
+        assert!(!s.plays_for(Reason::Script) && !s.plays_for(Reason::Unspecified));
+        let none = settings("[pause_music]\nenabled = true\non = []").unwrap();
+        assert!(Reason::ALL.into_iter().all(|r| !none.plays_for(r)));
+        assert!(none.describe().starts_with("on for no locks"));
+    }
+
+    #[test]
+    fn a_wrong_reason_list_is_an_error() {
+        assert!(settings("[pause_music]\non = \"manual\"").is_err());
+        assert!(settings("[pause_music]\non = [\"party\"]").is_err());
+        assert!(settings("[pause_music]\non = [1]").is_err());
+    }
 
     /// Fields 6 and 7 of /proc/PID/stat: the session id and the controlling
     /// terminal (0 for none).

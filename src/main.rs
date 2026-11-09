@@ -23,6 +23,7 @@ mod music;
 mod palette;
 mod pam;
 mod quotes;
+mod reason;
 mod secret;
 mod sid;
 mod sound;
@@ -183,6 +184,8 @@ struct Lock {
     power: Option<cava::DisplayPower>,
     /// `[pause_music]`, when enabled.
     music: Option<music::Music>,
+    /// Why this lock was started (`--reason`, `NIRULOCK_REASON`).
+    reason: reason::Reason,
     /// The music's own audio detector when the panel has none; dropped once
     /// the start is decided.
     music_audio: Option<audio::Audio>,
@@ -227,7 +230,7 @@ impl Drop for Lock {
 }
 
 impl Lock {
-    fn new() -> Result<Self> {
+    fn new(reason: reason::Reason) -> Result<Self> {
         // Resolve the account before anything is grabbed or shown: a lock
         // that cannot name its owner must not start at all.
         let user = pam::current_user().map_err(|e| format!("refusing to lock: {e}"))?;
@@ -254,10 +257,11 @@ impl Lock {
                 )
             });
         // The music thread scans the folder and looks for sidplayfp itself;
-        // nothing here waits for it.
+        // nothing here waits for it. Only the lock reasons in
+        // `pause_music.on` (by default a manual lock) start it at all.
         let music = cfg
             .pause_music
-            .enabled
+            .plays_for(reason)
             .then(|| music::Music::start(&cfg.pause_music))
             .flatten();
         let music_audio = (music.is_some() && visual.as_ref().and_then(|v| v.audio()).is_none())
@@ -308,6 +312,7 @@ impl Lock {
             visual,
             power,
             music,
+            reason,
             music_audio,
             music_info: None,
             info_renderer,
@@ -332,6 +337,13 @@ impl Lock {
             rng: seed(),
         };
         lock.trace("starting");
+        lock.trace(&format!("reason: {}", lock.reason));
+        if lock.cfg.pause_music.enabled && !lock.cfg.pause_music.plays_for(lock.reason) {
+            lock.trace(&format!(
+                "pause music not started: lock reason {}",
+                lock.reason
+            ));
+        }
         lock.trace(&format!("keyboard: {}", lock.keyboard.backend()));
         if let Some(power) = lock.power.as_ref() {
             lock.trace(&format!("display power: {}", power.mode()));
@@ -1609,18 +1621,73 @@ fn prompt_line(hostname: &str, word: &str) -> String {
     }
 }
 
+const USAGE: &str = "Usage: nirulock [--lock] [--reason REASON] | --version | --config | --help
+
+  --reason REASON  why the screen is locked: manual, idle, suspend, script or
+                   session (also read from NIRULOCK_REASON; the argument wins).
+                   [pause_music] plays only for the reasons in pause_music.on,
+                   by default only for manual. No reason or an unknown one
+                   locks the same way, without pause music.";
+
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    Version,
+    Config,
+    Help,
+    /// Lock, with the `--reason` argument if one was given.
+    Lock(Option<String>),
+}
+
+/// The command line. Only an unknown option is an error: a missing or
+/// unknown reason still locks (see [`reason::Reason::resolve`]).
+fn parse_args(args: &[String]) -> std::result::Result<Command, String> {
+    match args.first().map(String::as_str) {
+        Some("--version") if args.len() == 1 => return Ok(Command::Version),
+        Some("--config") if args.len() == 1 => return Ok(Command::Config),
+        Some("--help" | "-h") if args.len() == 1 => return Ok(Command::Help),
+        _ => {}
+    }
+    let mut reason = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--lock" => {}
+            "--reason" => match rest.next() {
+                Some(value) => reason = Some(value.clone()),
+                None => {
+                    eprintln!("nirulock: --reason needs a value; locking without pause music");
+                    reason = Some(String::new());
+                }
+            },
+            other => match other.strip_prefix("--reason=") {
+                Some(value) => reason = Some(value.to_string()),
+                None => return Err(format!("unknown argument {other:?}")),
+            },
+        }
+    }
+    Ok(Command::Lock(reason))
+}
+
 fn main() {
-    let arg = std::env::args().nth(1).unwrap_or_default();
-    match arg.as_str() {
-        "--version" => println!("NIRULOCK {}", env!("CARGO_PKG_VERSION")),
-        "--config" => match config::Config::load() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let command = match parse_args(&args) {
+        Ok(command) => command,
+        Err(e) => {
+            eprintln!("nirulock: {e}\n{USAGE}");
+            std::process::exit(2)
+        }
+    };
+    match command {
+        Command::Version => println!("NIRULOCK {}", env!("CARGO_PKG_VERSION")),
+        Command::Help => println!("{USAGE}"),
+        Command::Config => match config::Config::load() {
             Ok(c) => println!("{}", c.describe()),
             Err(e) => {
                 eprintln!("{e}");
                 std::process::exit(1)
             }
         },
-        "" | "--lock" => match Lock::new() {
+        Command::Lock(arg) => match Lock::new(lock_reason(arg.as_deref())) {
             Ok(mut lock) => {
                 if let Err(e) = lock.run() {
                     let _ = lock.tell_wm_locked(false);
@@ -1634,16 +1701,57 @@ fn main() {
                 std::process::exit(1)
             }
         },
-        _ => {
-            eprintln!("Usage: nirulock [--version|--config|--lock]");
-            std::process::exit(2)
-        }
     }
+}
+
+/// The reason from the command line or the environment. The variable is
+/// removed so that nothing the lock starts (CAVA, the player) inherits it.
+fn lock_reason(arg: Option<&str>) -> reason::Reason {
+    let env = std::env::var(reason::ENV).ok();
+    // Still single-threaded here: no other thread reads the environment.
+    std::env::remove_var(reason::ENV);
+    reason::Reason::resolve(arg, env.as_deref())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn the_command_line_names_the_reason() {
+        assert_eq!(parse_args(&args(&[])), Ok(Command::Lock(None)));
+        assert_eq!(parse_args(&args(&["--lock"])), Ok(Command::Lock(None)));
+        assert_eq!(
+            parse_args(&args(&["--reason", "manual"])),
+            Ok(Command::Lock(Some("manual".into())))
+        );
+        assert_eq!(
+            parse_args(&args(&["--lock", "--reason=idle"])),
+            Ok(Command::Lock(Some("idle".into())))
+        );
+        assert_eq!(parse_args(&args(&["--version"])), Ok(Command::Version));
+        assert_eq!(parse_args(&args(&["--config"])), Ok(Command::Config));
+        assert_eq!(parse_args(&args(&["--help"])), Ok(Command::Help));
+        assert!(parse_args(&args(&["--unlock"])).is_err());
+    }
+
+    #[test]
+    fn a_reason_without_a_value_still_locks() {
+        // Unspecified, so the music stays off; the lock itself starts.
+        let command = parse_args(&args(&["--reason"])).unwrap();
+        assert_eq!(command, Command::Lock(Some(String::new())));
+        let Command::Lock(arg) = command else {
+            unreachable!()
+        };
+        assert_eq!(
+            reason::Reason::resolve(arg.as_deref(), Some("manual")),
+            reason::Reason::Unspecified
+        );
+    }
 
     #[test]
     fn pulse_echo_hides_the_length() {

@@ -57,6 +57,10 @@ jobs:
           sudo -u composer env LANG=en_US.UTF-8 sh /tmp/nirulock-compose/compose-unlock.sh /tmp/nirulock-compose/nirulock :91
       - name: CAVA stops repainting in silence
         run: sh tests/resource-check.sh target/release/nirulock
+      # [pause_music] only for the configured lock reasons (manual by
+      # default), with a fake sidplayfp and no sound server.
+      - name: Pause music only for a manual lock
+        run: sh tests/pause-music-reason.sh target/release/nirulock :180
       # K4: no account, no lock; never a fallback to $USER or root.
       - name: A process without an account refuses to lock
         run: |

@@ -37,7 +37,8 @@ show_hostname = false
 # Pause music: Commodore 64 SID tunes while the screen is locked. Off by
 # default. Needs sidplayfp. Starts only when no other audio plays in the first
 # seconds after locking; Esc, unlock, suspend and (by default) the display
-# going off stop it for the rest of the lock.
+# going off stop it for the rest of the lock. Only plays for the lock reasons
+# in `on` (see `nirulock --help`): by default only when you lock by hand.
 [pause_music]
 enabled = false
 # .sid files, searched recursively and played in natural order (1-, 2-, 10-).
@@ -46,6 +47,11 @@ folder = "~/Music/SID"
 # DOCUMENTS directory) knows the length.
 track_seconds = 180
 stop_on_display_off = true
+# Lock reasons that may play: manual (a key, the launcher, `niructl lock` in a
+# terminal), idle (NIRUIDLE), suspend (lock before suspend), script
+# (`niructl lock --silent`, SSH), session, and unspecified (an older caller
+# that gives no reason). Leave it out for the default, ["manual"].
+on = ["manual"]
 
 [palette]
 background = "000000"

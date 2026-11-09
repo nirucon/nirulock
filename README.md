@@ -36,7 +36,8 @@ unlocked screen.
 - Optional NIRUX sounds through NIRUNOTIFY (`auth-fail`, `lock`, `unlock`).
 - Optional pause music (`[pause_music]`, off by default): Commodore 64 SID
   tunes from `~/Music/SID` through `sidplayfp` while the screen is locked and
-  nothing else is playing. Esc stops it.
+  nothing else is playing, by default only when you lock by hand (not on
+  idle, suspend or a script's lock). Esc stops it.
 
 ## Requirements
 
@@ -84,10 +85,29 @@ authentication stack (templates for Debian, Arch and Void are in `pam/`).
 ## Usage
 
 ```sh
-nirulock              # lock now
-nirulock --config     # print the effective settings, including the layout
+nirulock                      # lock now
+nirulock --reason manual      # lock now, saying why (see below)
+nirulock --config             # print the effective settings, including the layout
 nirulock --version
+nirulock --help
 ```
+
+`--reason` (or the `NIRULOCK_REASON` environment variable; the argument
+wins) tells the lock why it was started: `manual`, `idle`, `suspend`,
+`script` or `session`. It only decides whether the [pause music](#pause-music)
+may play; the lock itself, the grabs and PAM are the same for every reason.
+No reason, or one this release does not know, locks normally without pause
+music, so an older caller never gets noisier. In NIRUWM the reasons come from
+the callers:
+
+| Lock from | Reason |
+|---|---|
+| `Super+Escape` (NIRUWM `lock` action), the launcher's lock actions and Quick Settings | `manual` |
+| `niructl lock` typed in a terminal, or `niructl lock --manual` | `manual` |
+| `niructl lock` without a terminal (SSH command, cron, scripts) or `niructl lock --silent` | `script` |
+| NIRUIDLE after the screensaver | `idle` |
+| Lock before suspend, lid close, `niructl suspend`, `Super+Shift+Escape` | `suspend` |
+| An older caller that passes nothing | `unspecified` |
 
 In NIRUWM, `Super+Escape` locks and `Super+Shift+Escape` locks and then
 suspends. `niruidle` locks automatically after the screensaver (see `[idle]`
@@ -132,7 +152,10 @@ work is described in [docs/BEHAVIOUR.md](docs/BEHAVIOUR.md).
 ### Pause music
 
 With `[pause_music] enabled = true`, the lock plays Commodore 64 SID tunes
-while it is shown. It waits 2 seconds after locking (up to 5 while an idle
+while it is shown, but only for the lock reasons in `on` (default
+`["manual"]`: only when you lock by hand; see [Usage](#usage)). An automatic
+lock (idle, before suspend, a script or SSH) stays quiet, so a rollout that
+locks several machines at once does not start music on all of them. It waits 2 seconds after locking (up to 5 while an idle
 stream is present) and starts only if no other audio played in that time and
 the folder holds `.sid` files. The tunes play in natural order (`1-`, `2-`,
 `10-`), looping, each for its length from the HVSC `Songlengths.md5` when that
@@ -172,6 +195,7 @@ enabled = false
 folder = "~/Music/SID"     # .sid files, searched recursively
 track_seconds = 180        # per tune without Songlengths.md5 (5 to 3600)
 stop_on_display_off = true
+on = ["manual"]            # lock reasons that play: manual, idle, suspend, script, session, unspecified
 
 [palette]                  # optional overrides; normally the NIRUX theme decides
 background = "000000"
