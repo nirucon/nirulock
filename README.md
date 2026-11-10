@@ -85,7 +85,7 @@ authentication stack (templates for Debian, Arch and Void are in `pam/`).
 ## Usage
 
 ```sh
-nirulock                      # lock now
+nirulock                      # lock now (--lock is accepted and does the same)
 nirulock --reason manual      # lock now, saying why (see below)
 nirulock --config             # print the effective settings, including the layout
 nirulock --version
@@ -111,7 +111,8 @@ the callers:
 
 In NIRUWM, `Super+Escape` locks and `Super+Shift+Escape` locks and then
 suspends. `niruidle` locks automatically after the screensaver (see `[idle]`
-in the NIRUWM config).
+in the NIRUWM config). In NIRUX, `nirux manual lock` describes locking, the
+idle ladder and every lock setting.
 
 On the lock screen: type the password and press Enter. Escape clears the
 entry (and stops the pause music for the rest of this lock); Backspace first
@@ -163,7 +164,7 @@ file is in the folder (or its `DOCUMENTS` directory), otherwise for
 `track_seconds`. While the spectrum is shown it visualises the tune.
 
 A subtle line under the clock or panel names the tune from its PSID/RSID
-header: `♪ Title — Author · Year  ·  Esc stops the music`.
+header: the title, author and year, followed by `Esc stops the music`.
 
 The music stops, and stays stopped for the rest of the lock, on unlock, on
 Esc, before suspend and (unless `stop_on_display_off = false`) when the display
