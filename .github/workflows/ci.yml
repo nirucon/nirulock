@@ -61,6 +61,10 @@ jobs:
       # default), with a fake sidplayfp and no sound server.
       - name: Pause music only for a manual lock
         run: sh tests/pause-music-reason.sh target/release/nirulock :180
+      # The typing click follows the password entry, through a fake
+      # NIRUNOTIFY socket; nothing is played.
+      - name: Typing click for keys that change the entry
+        run: sh tests/typing-sound.sh target/release/nirulock :182
       # K4: no account, no lock; never a fallback to $USER or root.
       - name: A process without an account refuses to lock
         run: |

@@ -33,7 +33,8 @@ unlocked screen.
   quotes; CAVA and audio monitoring stop completely with the display off.
 - Password-length hiding with `prompt_echo = "pulse"`.
 - Every copy of the password is wiped after use; nothing about keys is logged.
-- Optional NIRUX sounds through NIRUNOTIFY (`auth-fail`, `lock`, `unlock`).
+- Optional NIRUX sounds through NIRUNOTIFY (`auth-fail`, `lock`, `unlock`,
+  and a quiet typewriter click for each password key, `lock-typing`).
 - Optional pause music (`[pause_music]`, off by default): Commodore 64 SID
   tunes from `~/Music/SID` through `sidplayfp` while the screen is locked and
   nothing else is playing, by default only when you lock by hand (not on

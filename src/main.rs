@@ -197,6 +197,8 @@ struct Lock {
     note_renderer: Option<core::TextRenderer>,
     state: State,
     input: zeroize::Zeroizing<String>,
+    /// Typewriter clicks for keys that change the entry.
+    typing: sound::Typing,
     started: Instant,
     message: String,
     wm_notified: bool,
@@ -319,6 +321,7 @@ impl Lock {
             note_renderer,
             state: State::Prompt,
             input: secret::new_entry(),
+            typing: sound::Typing::default(),
             started: Instant::now(),
             message: String::new(),
             wm_notified: false,
@@ -1242,6 +1245,16 @@ impl Lock {
         let _ = self.surface.c.flush();
     }
 
+    /// The typing click, only when the key changed the entry. It is queued
+    /// for another thread and never delays the key or PAM.
+    fn typed(&mut self, keycode: u8, time: u32, before: usize) {
+        if self.input.len() != before {
+            self.typing.key(keycode, time);
+        } else {
+            self.typing.other_key(keycode, time);
+        }
+    }
+
     fn handle_key(&mut self, e: KeyPressEvent) -> Result<bool> {
         self.caps = e.state.contains(KeyButMask::LOCK);
         // Never log keycodes, modifiers, characters or password lengths.
@@ -1260,20 +1273,25 @@ impl Lock {
                 return Ok(true);
             }
             keyboard::Key::Erase => {
+                let before = self.input.len();
                 secret::erase_last(&mut self.input);
+                self.typed(e.detail, e.time, before);
                 self.move_pulse();
             }
             // Escape clears the entry and stops the pause music for the rest
             // of this lock; it never dismisses the lock.
             keyboard::Key::Clear => {
+                self.typing.other_key(e.detail, e.time);
                 secret::clear(&mut self.input);
                 self.stop_music("from the lock screen");
             }
             keyboard::Key::Text(text) => {
+                let before = self.input.len();
                 secret::push(&mut self.input, text.as_str());
+                self.typed(e.detail, e.time, before);
                 self.move_pulse();
             }
-            keyboard::Key::Nothing => {}
+            keyboard::Key::Nothing => self.typing.other_key(e.detail, e.time),
         }
         self.draw()?;
         Ok(true)

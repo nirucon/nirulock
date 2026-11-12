@@ -16,7 +16,14 @@ entry stays usable the whole time. With NIRUNOTIFY running, a rejected password
 also plays the soft NIRUX `auth-fail` sound, and locking and unlocking can play
 a near-silent chime (`lock`/`unlock`, off by default in
 `~/.config/nirux/sounds.toml`). The request is one line on NIRUNOTIFY's socket,
-sent after PAM has answered; it never affects authentication. Every copy of the password (the entry, the
+sent after PAM has answered; it never affects authentication. Each key that
+changes the password entry (a character or Backspace, not Enter, Esc,
+modifiers or arrows) asks for a quiet typewriter click, `lock-typing` (category
+`system`, on by default; turn it off with `nirux sounds` or
+`lock-typing = false` under `[sounds.system]`). The request goes to one sender
+thread through a small queue that drops rather than waits, so typing and PAM
+never wait for it. A held key's auto-repeat stays silent (the same key again
+within 100 ms) and clicks are at most one per 35 ms. Every copy of the password (the entry, the
 authentication worker and the PAM response) is wiped after use. NIRULOCK publishes
 `_NIRU_LOCK_READY` after verified keyboard/pointer grabs and mapping, and clears
 it on unlock; `niructl suspend` requires that readiness. Content follows the

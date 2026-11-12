@@ -3,6 +3,27 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.26.0 (2026-11-12)
+
+### Added
+
+- A typewriter click while you type the password: each key that changes the
+  entry (a character or Backspace) asks NIRUNOTIFY 0.6.0 or later for the
+  new NIRUX sound `lock-typing` (category `system`, on by default; off with
+  `nirux sounds` or `lock-typing = false` under `[sounds.system]` in
+  `~/.config/nirux/sounds.toml`). Enter, Esc, modifiers, arrows and
+  Backspace on an empty entry stay silent. A held key's auto-repeat does not
+  click again (the same key within 100 ms), and there is at most one click
+  per 35 ms. The request goes to one sender thread through a small queue
+  that drops a click rather than wait, so input and PAM are never delayed;
+  without NIRUNOTIFY nothing happens. Nothing about the keys is logged.
+
+### Tests
+
+- `tests/typing-sound.sh` (in CI): in its own Xvfb with a fake NIRUNOTIFY
+  socket, typed characters and Backspace click, Esc, Enter, modifiers and
+  Backspace on an empty entry do not.
+
 ## 0.25.0 (2026-11-09)
 
 There is no 0.24.0 release: its tag was pushed by mistake on the 0.23.1
