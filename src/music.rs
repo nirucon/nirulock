@@ -729,12 +729,47 @@ fn player(
 /// sidlite alone but still asks for reSIDfp by default, so every tune fails
 /// with "Requested SID emulation not built in"; it needs `--sidlite`. A build
 /// with reSIDfp or reSID uses its own default.
+///
+/// The answer must come quickly: a player that does not know `--help` and
+/// starts playing instead is stopped after a second, so no sound outlives
+/// the question.
 fn engine_flag(program: &Path) -> Option<&'static str> {
-    let output = Command::new(program)
+    // SAFETY: getpid is async-signal-safe and has no preconditions.
+    let parent = unsafe { libc::getpid() };
+    let mut command = Command::new(program);
+    command
         .arg("--help")
         .stdin(Stdio::null())
-        .output()
-        .ok()?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: only async-signal-safe calls between fork and exec. The
+    // question dies with the lock, like every player.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0
+                || libc::getppid() != parent
+            {
+                libc::_exit(127);
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < Duration::from_secs(1) => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let output = child.wait_with_output().ok()?;
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     engine_from_help(&text)
