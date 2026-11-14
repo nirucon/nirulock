@@ -609,6 +609,7 @@ fn player(
         return;
     }
     let lengths = find_songlengths(folder);
+    let engine = engine_flag(&program);
     let mut quick_failures = 0;
     let mut index = 0;
     loop {
@@ -639,7 +640,7 @@ fn player(
         drop(data);
         let line = sid::info_line(header.as_ref(), &file);
         let started = Instant::now();
-        let mut child = match spawn(&program, &file, seconds, song) {
+        let mut child = match spawn(&program, engine, &file, seconds, song) {
             Ok(child) => child,
             Err(e) => {
                 eprintln!("nirulock: pause_music: cannot start sidplayfp: {e}; no music");
@@ -722,11 +723,49 @@ fn player(
     }
 }
 
-/// Start one tune: `sidplayfp -q -os -o<song> -t<seconds> FILE`.
-fn spawn(program: &Path, file: &Path, seconds: u32, song: u16) -> std::io::Result<Child> {
+/// The emulation option this sidplayfp needs, read from its `--help`.
+///
+/// sidplayfp lists only the emulations it was built with. Void's 3.2.3 has
+/// sidlite alone but still asks for reSIDfp by default, so every tune fails
+/// with "Requested SID emulation not built in"; it needs `--sidlite`. A build
+/// with reSIDfp or reSID uses its own default.
+fn engine_flag(program: &Path) -> Option<&'static str> {
+    let output = Command::new(program)
+        .arg("--help")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    engine_from_help(&text)
+}
+
+fn engine_from_help(help: &str) -> Option<&'static str> {
+    let has = |flag: &str| {
+        help.lines()
+            .any(|line| line.split_whitespace().next() == Some(flag))
+    };
+    if has("--residfp") || has("--resid") {
+        None
+    } else if has("--sidlite") {
+        Some("--sidlite")
+    } else {
+        None
+    }
+}
+
+/// Start one tune: `sidplayfp [ENGINE] -q -os -o<song> -t<seconds> FILE`.
+fn spawn(
+    program: &Path,
+    engine: Option<&str>,
+    file: &Path,
+    seconds: u32,
+    song: u16,
+) -> std::io::Result<Child> {
     // SAFETY: getpid is async-signal-safe and has no preconditions.
     let parent = unsafe { libc::getpid() };
     let mut command = Command::new(program);
+    command.args(engine);
     command
         .arg("-q")
         .arg("-os")
@@ -862,6 +901,19 @@ impl Drop for SleepWatch {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn engine_follows_what_sidplayfp_was_built_with() {
+        let debian = " --residfp    use reSIDfp emulation (default)\n --resid      use reSID emulation\n --exsid      enable exSID support\n";
+        assert_eq!(engine_from_help(debian), None);
+        let void = " -w[name]     create wav file\n --sidlite    use sidlite emulation\n";
+        assert_eq!(engine_from_help(void), Some("--sidlite"));
+        assert_eq!(engine_from_help("Options:\n -q quiet\n"), None);
+        assert_eq!(
+            engine_from_help(" --sidlite    use sidlite\n --residfp    use reSIDfp\n"),
+            None
+        );
+    }
+
     use super::*;
 
     fn settings(text: &str) -> Result<Settings, String> {
@@ -935,7 +987,7 @@ mod tests {
         let player = dir.join("player");
         std::fs::write(&player, "#!/bin/sh\nexec sleep 5\n").unwrap();
         std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut child = spawn(&player, Path::new("tune.sid"), 5, 1).unwrap();
+        let mut child = spawn(&player, None, Path::new("tune.sid"), 5, 1).unwrap();
         let pid = child.id();
         // Wait for the exec.
         let until = Instant::now() + Duration::from_secs(2);
