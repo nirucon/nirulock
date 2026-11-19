@@ -182,7 +182,7 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
 [config.example.toml](config.example.toml).
 
 ```toml
-layout = "cava"            # cava, minimal, terminal, runic, corner
+layout = "cava"            # cava, ascii, minimal, terminal, runic, corner
 visualizer = true
 visual = "auto"            # auto, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns

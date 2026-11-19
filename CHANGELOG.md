@@ -3,6 +3,22 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.27.0 (2026-11-19)
+
+### Added
+
+- A new layout, `ascii` ("NIRUX ascii"), the lock screen's twin of
+  NIRUSCREENSAVER's `ascii` scene. When the screen locks, the large NIRUX
+  banner is typed out behind a block cursor on every monitor, centred and
+  sized for each one, with "A MINIMAL X11 DESKTOP" under it. The prompt
+  monitor has the clock, the password entry and the away time below. The
+  typing takes about two seconds and never delays the prompt: you can type
+  the password at once. Afterwards the screen is still and the loop wakes
+  once a minute, as before. The banner takes the theme's accent colour when
+  it reads well on the background (WCAG contrast 4.5), otherwise the text
+  colour. Choose it with `layout = "ascii"` in `~/.config/niruui/lock.toml`;
+  `layout = "cava"` (the default) goes back.
+
 ## 0.26.0 (2026-11-12)
 
 ### Added

@@ -46,18 +46,8 @@ fn choose(
         .unwrap_or((None, fallback))
 }
 
-pub fn prompt_area(
-    c: &RustConnection,
-    root: u32,
-    preferred: Option<u32>,
-    fallback: Area,
-) -> (Option<u32>, Area) {
-    let point = c
-        .query_pointer(root)
-        .ok()
-        .and_then(|r| r.reply().ok())
-        .map(|r| (r.root_x, r.root_y))
-        .unwrap_or_else(|| fallback.centre());
+/// The active outputs (CRTCs with a mode) as RandR reports them.
+fn active_outputs(c: &RustConnection, root: u32) -> Vec<(u32, Area)> {
     let mut outputs = Vec::new();
     if let Some(resources) = c
         .randr_get_screen_resources_current(root)
@@ -81,20 +71,40 @@ pub fn prompt_area(
                 .and_then(|r| r.reply().ok())
             {
                 if crtc.width > 0 && crtc.height > 0 {
-                    outputs.push((
-                        output,
-                        Area {
-                            x: crtc.x,
-                            y: crtc.y,
-                            width: crtc.width,
-                            height: crtc.height,
-                        },
-                    ));
+                    let area = Area {
+                        x: crtc.x,
+                        y: crtc.y,
+                        width: crtc.width,
+                        height: crtc.height,
+                    };
+                    // Mirrored outputs share one CRTC area: list it once.
+                    if !outputs.iter().any(|(_, a)| *a == area) {
+                        outputs.push((output, area));
+                    }
                 }
             }
         }
     }
-    choose(&outputs, preferred, point, fallback)
+    outputs
+}
+
+/// The output the prompt goes on, and every active output's area (empty
+/// when RandR reports none; the caller then uses the whole root).
+pub fn prompt_area(
+    c: &RustConnection,
+    root: u32,
+    preferred: Option<u32>,
+    fallback: Area,
+) -> (Option<u32>, Area, Vec<Area>) {
+    let point = c
+        .query_pointer(root)
+        .ok()
+        .and_then(|r| r.reply().ok())
+        .map(|r| (r.root_x, r.root_y))
+        .unwrap_or_else(|| fallback.centre());
+    let outputs = active_outputs(c, root);
+    let (id, area) = choose(&outputs, preferred, point, fallback);
+    (id, area, outputs.into_iter().map(|(_, a)| a).collect())
 }
 
 #[cfg(test)]

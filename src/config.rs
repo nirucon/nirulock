@@ -16,6 +16,8 @@ pub enum Layout {
     Runic,
     Corner,
     Cava,
+    /// "NIRUX ascii": the NIRUX banner typed out, the prompt below.
+    Ascii,
 }
 
 impl Layout {
@@ -26,6 +28,7 @@ impl Layout {
             "runic" => Some(Self::Runic),
             "corner" => Some(Self::Corner),
             "cava" => Some(Self::Cava),
+            "ascii" => Some(Self::Ascii),
             _ => None,
         }
     }
@@ -37,6 +40,7 @@ impl Layout {
             Self::Runic => "runic",
             Self::Corner => "corner",
             Self::Cava => "cava",
+            Self::Ascii => "ascii",
         }
     }
 }
@@ -363,7 +367,7 @@ impl Config {
         }
         if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
             cfg.layout = Layout::parse(layout).ok_or_else(|| {
-                "layout must be minimal, terminal, runic, corner or cava".to_string()
+                "layout must be minimal, terminal, runic, corner, cava or ascii".to_string()
             })?;
         }
         if let Some(echo) = v.get("prompt_echo").and_then(|x| x.as_str()) {
@@ -557,6 +561,8 @@ mod tests {
         assert_eq!(Layout::parse("runic"), Some(Layout::Runic));
         assert_eq!(Layout::parse("corner"), Some(Layout::Corner));
         assert_eq!(Layout::parse("CAVA"), Some(Layout::Cava));
+        assert_eq!(Layout::parse("ascii"), Some(Layout::Ascii));
+        assert_eq!(Layout::Ascii.as_str(), "ascii");
         assert!(Layout::parse("noir-ish").is_none());
     }
 
