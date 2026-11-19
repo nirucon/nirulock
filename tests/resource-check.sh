@@ -61,7 +61,7 @@ frames() {
 }
 # The spectrum alone, as before 0.19: CAVA runs whenever the display is on.
 mkdir -p "$TEST/config/niruui"
-printf 'visual = "cava"\n' > "$TEST/config/niruui/lock.toml"
+printf 'layout = "cava"\nvisual = "cava"\n' > "$TEST/config/niruui/lock.toml"
 touch "$TEST/sound"
 "$BIN" > "$TEST/lock.log" 2>&1 & LOCK=$!
 sleep 2
@@ -88,10 +88,11 @@ printf 'resumed: %s distinct frames of 5 within 1 s of sound\n' "$resumed_frames
 kill -0 "$LOCK" || fail "the lock exited"
 printf 'PASS: silence stops the repaint (%s%% CPU), sound resumes it\n' "$silent_cpu"
 
-# visual = "auto" (the default) without a sound server: quotes, never CAVA,
-# even while the fixture would play, and a static screen between changes.
+# The cava layout with visual = "auto" (the default) without a sound server:
+# quotes, never CAVA, even while the fixture would play, and a static screen
+# between changes.
 kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
-rm -f "$TEST/config/niruui/lock.toml"
+printf 'layout = "cava"\n' > "$TEST/config/niruui/lock.toml"
 touch "$TEST/sound"
 PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-auto.log" 2>&1 & LOCK=$!
 sleep 3
@@ -118,3 +119,19 @@ sleep 2
 [ "$(cat "$quotes/havamal-en.txt")" = "My own quote" ] || fail "a collection was overwritten"
 [ ! -e "$quotes/stoic-sv.txt" ] || fail "a deleted collection was recreated"
 printf 'PASS: without music the panel shows quotes and CAVA never starts\n'
+
+# The default layout, ascii-cava, without a sound server: no CAVA and no
+# quote collections, the banner typed and then only the cursor blinking
+# (at most two distinct frames), at idle CPU.
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+rm -f "$TEST/config/niruui/lock.toml"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-ascii.log" 2>&1 & LOCK=$!
+sleep 9
+kill -0 "$LOCK" || { cat "$TEST/lock-ascii.log"; exit 1; }
+pgrep -f "$TEST/bin/cava" > /dev/null && fail "CAVA started in ascii-cava without music"
+ascii_cpu=$(cpu "$LOCK" 6)
+ascii_frames=$(frames)
+printf 'ascii:   nirulock %s%% CPU, %s distinct frames of 5 (the cursor blinks), no CAVA\n' "$ascii_cpu" "$ascii_frames"
+[ "$ascii_frames" -le 2 ] || fail "ascii-cava repainted more than the cursor"
+awk -v c="$ascii_cpu" 'BEGIN { exit !(c <= 0.5) }' || fail "ascii-cava CPU above 0.5%"
+printf 'PASS: ascii-cava stays still but for the cursor, without CAVA\n'
