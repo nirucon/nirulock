@@ -517,10 +517,11 @@ fn text_is_centred_by_its_ink_and_the_entry_never_moves() {
     let directory =
         std::env::temp_dir().join(format!("nirulock-x11-layout-{}", std::process::id()));
     std::fs::create_dir_all(directory.join("config/niruui")).unwrap();
-    // No panel: only text, so every ink band is a line of text.
+    // The cava layout without a panel: only text, so every ink band is a
+    // line of text. (The default, ascii-cava, draws the banner.)
     std::fs::write(
         directory.join("config/niruui/lock.toml"),
-        "visual = \"none\"\n",
+        "layout = \"cava\"\nvisual = \"none\"\n",
     )
     .unwrap();
     let (c, screen) = x11rb::connect(None).unwrap();

@@ -3,6 +3,31 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.28.0 (2026-11-19)
+
+### Added
+
+- **`ascii-cava`, the new default layout.** NIRUX ascii with the CAVA
+  spectrum under it: the banner and "A MINIMAL X11 DESKTOP" on every
+  monitor, and on the prompt monitor the spectrum, exactly as wide as the
+  banner, while music plays, then the clock, the password prompt and the
+  away time. With `visual = "auto"` (the default) the panel stays empty
+  when nothing plays: no quote competes with the banner. `layout = "cava"`
+  brings back the previous default.
+- `visual = "music"`: the spectrum while music plays, otherwise nothing, in
+  `cava` too.
+
+### Changed
+
+- **Both ascii layouts are typed slowly and look like an old terminal.**
+  The banner is typed one `#` at a time at NIRUSCREENSAVER's pace (about
+  seven seconds with the line), the character just typed glows white and
+  settles into the accent colour, a large banner has a dark scanline
+  through every third pixel row, and a block cursor blinks after "A MINIMAL
+  X11 DESKTOP" once the text is done (it stops while the display is off).
+  The prompt works from the first moment. Only what changes is drawn and
+  copied: one character while typing, the cursor's cell when it blinks.
+
 ## 0.27.0 (2026-11-19)
 
 ### Added

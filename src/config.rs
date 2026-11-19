@@ -18,9 +18,21 @@ pub enum Layout {
     Cava,
     /// "NIRUX ascii": the NIRUX banner typed out, the prompt below.
     Ascii,
+    /// NIRUX ascii with the spectrum under it while music plays (default).
+    AsciiCava,
 }
 
 impl Layout {
+    /// The layouts that draw the NIRUX banner.
+    pub fn is_ascii(self) -> bool {
+        matches!(self, Self::Ascii | Self::AsciiCava)
+    }
+
+    /// The layouts with a spectrum or quote panel.
+    pub fn has_panel(self) -> bool {
+        matches!(self, Self::Cava | Self::AsciiCava)
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "minimal" => Some(Self::Minimal),
@@ -29,6 +41,7 @@ impl Layout {
             "corner" => Some(Self::Corner),
             "cava" => Some(Self::Cava),
             "ascii" => Some(Self::Ascii),
+            "ascii-cava" => Some(Self::AsciiCava),
             _ => None,
         }
     }
@@ -41,6 +54,7 @@ impl Layout {
             Self::Corner => "corner",
             Self::Cava => "cava",
             Self::Ascii => "ascii",
+            Self::AsciiCava => "ascii-cava",
         }
     }
 }
@@ -270,7 +284,7 @@ impl Default for Config {
             font_path: None,
             rune_font_path: None,
             font_size: 22.0,
-            layout: Layout::Cava,
+            layout: Layout::AsciiCava,
             visualizer: true,
             visual: crate::visual::Mode::Auto,
             quotes: crate::quotes::all(),
@@ -367,7 +381,8 @@ impl Config {
         }
         if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
             cfg.layout = Layout::parse(layout).ok_or_else(|| {
-                "layout must be minimal, terminal, runic, corner, cava or ascii".to_string()
+                "layout must be ascii-cava, ascii, cava, minimal, terminal, runic or corner"
+                    .to_string()
             })?;
         }
         if let Some(echo) = v.get("prompt_echo").and_then(|x| x.as_str()) {
@@ -382,7 +397,7 @@ impl Config {
         }
         if let Some(visual) = v.get("visual").and_then(|x| x.as_str()) {
             cfg.visual = crate::visual::Mode::parse(visual)
-                .ok_or_else(|| "visual must be auto, cava, quotes or none".to_string())?;
+                .ok_or_else(|| "visual must be auto, music, cava, quotes or none".to_string())?;
         }
         if let Some(quotes) = v.get("quotes") {
             cfg.quotes = crate::quotes::patterns(quotes)?;
@@ -454,6 +469,17 @@ impl Config {
         Ok(cfg)
     }
 
+    /// What the panel shows. In `ascii-cava`, `auto` means the spectrum
+    /// while music plays and nothing otherwise: the banner already fills the
+    /// screen, so no quote competes with it.
+    pub fn panel_mode(&self) -> crate::visual::Mode {
+        if self.layout == Layout::AsciiCava && self.visual == crate::visual::Mode::Auto {
+            crate::visual::Mode::Music
+        } else {
+            self.visual
+        }
+    }
+
     pub fn describe(&self) -> String {
         format!(
             "config: {}\nfont size: {}\nfont: {}\nlayout: {}\nprompt echo: {}\nvisualizer: {}\nvisual: {}\nquotes: {}\nrune font: {}\nautomatic unlock: never\nlegacy lock_timeout_minutes: {} (ignored)\nshow hostname: {}\npause music: {}",
@@ -463,7 +489,7 @@ impl Config {
             self.layout.as_str(),
             self.prompt_echo.as_str(),
             if self.visualizer { "on" } else { "off" },
-            self.visual.as_str(),
+            self.panel_mode().as_str(),
             self.quotes.join(", "),
             self.rune_font_path.as_deref().unwrap_or("auto"),
             self.lock_timeout_minutes,
@@ -481,7 +507,7 @@ mod tests {
     fn defaults_are_sane() {
         let c = Config::default();
         assert_eq!(c.font_size, 22.0);
-        assert_eq!(c.layout, Layout::Cava);
+        assert_eq!(c.layout, Layout::AsciiCava);
         assert!(c.visualizer);
     }
 
@@ -563,6 +589,8 @@ mod tests {
         assert_eq!(Layout::parse("CAVA"), Some(Layout::Cava));
         assert_eq!(Layout::parse("ascii"), Some(Layout::Ascii));
         assert_eq!(Layout::Ascii.as_str(), "ascii");
+        assert_eq!(Layout::parse("ascii-cava"), Some(Layout::AsciiCava));
+        assert_eq!(Layout::AsciiCava.as_str(), "ascii-cava");
         assert!(Layout::parse("noir-ish").is_none());
     }
 

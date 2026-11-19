@@ -28,7 +28,7 @@ unlocked screen.
   (`[SE] password:`) when more than one layout is configured.
 - Real XKB input via libxkbcommon (dead keys, AltGr, keypad, compose), loaded
   at run time with a built-in fallback.
-- Five layouts: `cava` (default), `minimal`, `terminal`, `runic` and `corner`.
+- Seven layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `cava`, `minimal`, `terminal`, `runic` and `corner`.
 - `visual = "auto"`: CAVA spectrum only while music plays, otherwise rotating
   quotes; CAVA and audio monitoring stop completely with the display off.
 - Password-length hiding with `prompt_echo = "pulse"`.
@@ -125,7 +125,9 @@ Choose one with `layout`:
 
 | Layout | Composition |
 |---|---|
-| `cava` | Default. Large clock above the spectrum or a quote; lock state, away time and prompt below |
+| `ascii-cava` | Default. "NIRUX ascii": the NIRUX banner typed out slowly on every monitor with "A MINIMAL X11 DESKTOP" and a blinking block cursor under it; on the prompt monitor the CAVA spectrum (as wide as the banner) while music plays, then the clock, prompt and away time |
+| `ascii` | The same without the spectrum |
+| `cava` | Large clock above the spectrum or a quote; lock state, away time and prompt below |
 | `minimal` | Centred clock, lock state, away time and prompt |
 | `terminal` | Left-aligned monospace screen with a `~$ lock` line |
 | `runic` | The minimal composition with a discreet rune row when a runic font is available (ornamental only) |
@@ -134,13 +136,24 @@ Choose one with `layout`:
 The hostname is not shown unless you set `show_hostname = true`; it then
 appears under the clock (`hostname:~$ lock` in `terminal`).
 
+The two ascii layouts look like an old terminal. The banner is typed one `#`
+at a time (about seven seconds in all, the same pace as NIRUSCREENSAVER's
+`ascii` scene); the character just typed glows white and settles into the
+theme's accent colour (the text colour when the accent is too dim on the
+background), and a large banner has a dark scanline through every third
+pixel row. The password prompt works from the first moment. Only what changes
+is drawn: one character while typing, the cursor's cell when it blinks. With
+the display off the cursor stops.
+
 ### Music or quotes
 
-`visual` decides what the `cava` layout shows where the spectrum is drawn:
+`visual` decides what the `cava` and `ascii-cava` layouts show where the
+spectrum is drawn:
 
 | Value | Shows |
 |---|---|
-| `auto` | Default. The CAVA spectrum only while music or radio plays, otherwise a quote |
+| `auto` | Default. The CAVA spectrum only while music or radio plays, otherwise a quote in `cava` and nothing in `ascii-cava` |
+| `music` | The spectrum while music plays, otherwise nothing |
 | `cava` | The spectrum alone (CAVA runs whenever the display is on) |
 | `quotes` | Quotes alone; CAVA never starts |
 | `none` | Nothing; `visualizer = false` without `visual` also means `none` |
@@ -182,9 +195,9 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
 [config.example.toml](config.example.toml).
 
 ```toml
-layout = "cava"            # cava, ascii, minimal, terminal, runic, corner
+layout = "ascii-cava"      # ascii-cava, ascii, cava, minimal, terminal, runic, corner
 visualizer = true
-visual = "auto"            # auto, cava, quotes, none
+visual = "auto"            # auto, music, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns
 prompt_echo = "count"      # count: one * per character (at most 32 shown); pulse: hide the length
 show_hostname = false      # true: show the machine name under the clock

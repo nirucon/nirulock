@@ -209,8 +209,8 @@ struct Lock {
     prompt_area: display::Area,
     /// Every active output, for the `ascii` layout's banner on each screen.
     outputs: Vec<display::Area>,
-    /// The `ascii` layout is still typing its banner: repaint every frame.
-    ascii_typing: bool,
+    /// The `ascii` layouts' banners, typing and cursor.
+    ascii: ascii::State,
     spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
@@ -253,9 +253,9 @@ impl Lock {
         // No file or sound-server I/O here: the quote collections and the audio
         // detector are read on their own threads.
         let visual =
-            (cfg.layout == config::Layout::Cava && cfg.visual != visual::Mode::None).then(|| {
+            (cfg.layout.has_panel() && cfg.panel_mode() != visual::Mode::None).then(|| {
                 visual::Visual::new(
-                    cfg.visual,
+                    cfg.panel_mode(),
                     true,
                     &renderer,
                     cfg.font_size,
@@ -273,8 +273,10 @@ impl Lock {
             .flatten();
         let music_audio = (music.is_some() && visual.as_ref().and_then(|v| v.audio()).is_none())
             .then(|| audio::Audio::start("nirulock", None));
-        let power =
-            (visual.is_some() || music.is_some()).then(|| cava::DisplayPower::new(&surface.c));
+        // The ascii layouts follow it too: the cursor does not blink for a
+        // display that is off.
+        let power = (visual.is_some() || music.is_some() || cfg.layout.is_ascii())
+            .then(|| cava::DisplayPower::new(&surface.c));
         let info_size = (cfg.font_size * 0.8).max(8.0);
         let info_renderer = renderer.at_size(info_size);
         let note_renderer = (music.is_some() && !info_renderer.has_glyph(NOTE))
@@ -310,7 +312,6 @@ impl Lock {
                 .unwrap_or(false)
         };
         let keyboard = keyboard::Keyboard::new(&surface.c);
-        let cfg_layout_is_ascii = cfg.layout == config::Layout::Ascii;
         let mut lock = Self {
             surface,
             cfg,
@@ -336,7 +337,7 @@ impl Lock {
             prompt_output: None,
             prompt_area,
             outputs: Vec::new(),
-            ascii_typing: cfg_layout_is_ascii,
+            ascii: ascii::State::default(),
             spectrum_rect: None,
             ready: false,
             caps,
@@ -994,182 +995,54 @@ impl Lock {
                     )?;
                 }
             }
-            config::Layout::Ascii => {
-                let (typed, line_typed, done) = ascii::reveal(self.started.elapsed());
-                let rows = ascii::banner_rows(typed);
-                let tagline: String = ascii::TAGLINE.chars().take(line_typed).collect();
-                let banner_fg = ascii::banner_colour(pal.focus, pal.foreground, pal.background);
-                let screens = if self.outputs.is_empty() {
-                    vec![area]
-                } else {
-                    self.outputs.clone()
-                };
-                // Size per pixel of font size, from the base font.
-                let base = self.cfg.font_size.max(1.0);
-                let advance = f32::from(self.renderer.width("#")) / base;
-                let line_ratio = f32::from(line) / base;
-                for screen in screens {
-                    let prompt_here = screen == area;
-                    let size = ascii::banner_size(
-                        screen.width,
-                        screen.height,
-                        if prompt_here { 0.5 } else { 0.6 },
-                        if prompt_here { 0.26 } else { 0.32 },
-                        advance,
-                        line_ratio,
-                    );
-                    let mut banner = self.renderer.at_size(size);
-                    let blh = i32::from(banner.line_height());
-                    let bwidth = i32::from(banner.width(ascii::BANNER[0]));
-                    let bascent = i32::from(banner.ascent());
-                    let sx = i32::from(screen.x);
-                    let sw = i32::from(screen.width);
-                    let sh = i32::from(screen.height);
-                    let scentre = sx + sw / 2;
-                    let u = i32::from(line);
-                    // The banner, the line under it, and on the prompt
-                    // screen the clock, entry and away time below.
-                    let banner_h = blh * ascii::BANNER.len() as i32;
-                    let below = if prompt_here {
-                        u * 3 / 4 + u + u * 5 / 2 + u * 3 / 2 * 3
-                    } else {
-                        u * 3 / 4 + u
-                    };
-                    let block = banner_h + below;
-                    let top0 = i32::from(screen.y) + sh * 45 / 100 - block / 2;
-                    let top0 = top0.max(i32::from(screen.y) + u);
-                    let left0 = scentre - bwidth / 2;
-                    let mut cursor_at = None;
-                    for (i, row) in rows.iter().enumerate() {
-                        let baseline = top0 + bascent + blh * i as i32;
-                        if !row.is_empty() {
-                            banner.draw_left(
-                                &self.surface.c,
-                                self.surface.gc,
-                                self.surface.back,
-                                self.surface.depth,
-                                layout::clamp16(left0),
-                                layout::clamp16(baseline),
-                                row,
-                                banner_fg,
-                                pal.background,
-                            )?;
-                        }
-                        if row.chars().count() < ascii::BANNER[i].chars().count()
-                            && cursor_at.is_none()
-                        {
-                            cursor_at = Some((left0 + i32::from(banner.width(row)), baseline));
-                        }
+            config::Layout::Ascii | config::Layout::AsciiCava => {
+                let spots = self.ascii_layout(area, self.cfg.layout == config::Layout::AsciiCava);
+                self.ascii_paint(&pal)?;
+                if let Some(rect) = spots.panel {
+                    if let Some(visual) = self.visual.as_mut() {
+                        visual.paint(&self.surface, &pal, rect)?;
+                        self.spectrum_rect = Some(rect);
                     }
-                    if let Some((x, y)) = cursor_at {
-                        if banner.has_glyph('█') {
-                            banner.draw_left(
-                                &self.surface.c,
-                                self.surface.gc,
-                                self.surface.back,
-                                self.surface.depth,
-                                layout::clamp16(x),
-                                layout::clamp16(y),
-                                ascii::CURSOR,
-                                pal.foreground,
-                                pal.background,
-                            )?;
-                        }
-                    }
-                    let tag_y = top0 + banner_h + u * 3 / 4 + i32::from(self.renderer.ascent());
-                    let tag_left = scentre - i32::from(self.renderer.width(ascii::TAGLINE)) / 2;
-                    if !tagline.is_empty() {
-                        self.renderer.draw_left(
-                            &self.surface.c,
-                            self.surface.gc,
-                            self.surface.back,
-                            self.surface.depth,
-                            layout::clamp16(tag_left),
-                            layout::clamp16(tag_y),
-                            &tagline,
-                            pal.muted,
-                            pal.background,
-                        )?;
-                    }
-                    // The cursor rests after the line once typing is done.
-                    if cursor_at.is_none()
-                        && typed == ascii::banner_chars()
-                        && self.renderer.has_glyph('█')
-                    {
-                        let x = tag_left
-                            + i32::from(self.renderer.width(&tagline))
-                            + if done {
-                                i32::from(self.renderer.width(" "))
-                            } else {
-                                0
-                            };
-                        self.renderer.draw_left(
-                            &self.surface.c,
-                            self.surface.gc,
-                            self.surface.back,
-                            self.surface.depth,
-                            layout::clamp16(x),
-                            layout::clamp16(tag_y),
-                            ascii::CURSOR,
-                            if done {
-                                pal.focus.max(pal.border)
-                            } else {
-                                pal.foreground
-                            },
-                            pal.background,
-                        )?;
-                    }
-                    if !prompt_here {
-                        continue;
-                    }
-                    let clock_y = tag_y + u * 5 / 2;
-                    let entry_y = clock_y + u * 3 / 2;
-                    let away_y = entry_y + u * 3 / 2;
-                    ascii_info = Some(layout::clamp16(clock_y - u * 5 / 4));
+                }
+                ascii_info = Some(spots.info);
+                draw(
+                    &mut self.renderer,
+                    &mut self.surface,
+                    spots.clock,
+                    &clock,
+                    pal.foreground,
+                )?;
+                entry(&mut self.renderer, &mut self.surface, spots.entry)?;
+                draw(
+                    &mut self.renderer,
+                    &mut self.surface,
+                    spots.away,
+                    &core::away_text(away),
+                    pal.border.max(pal.focus),
+                )?;
+                let mut row = spots.rows;
+                if self.cfg.show_hostname && !hostname.is_empty() {
                     draw(
                         &mut self.renderer,
                         &mut self.surface,
-                        layout::clamp16(clock_y),
-                        &clock,
-                        pal.foreground,
+                        layout::clamp16(row),
+                        &hostname,
+                        pal.muted,
                     )?;
-                    entry(
-                        &mut self.renderer,
-                        &mut self.surface,
-                        layout::clamp16(entry_y),
-                    )?;
+                    row += spots.step;
+                }
+                for (text, fg) in extras.iter() {
+                    if row > spots.limit {
+                        break;
+                    }
                     draw(
                         &mut self.renderer,
                         &mut self.surface,
-                        layout::clamp16(away_y),
-                        &core::away_text(away),
-                        pal.border.max(pal.focus),
+                        layout::clamp16(row),
+                        text,
+                        *fg,
                     )?;
-                    let mut row_y = away_y + u * 19 / 10;
-                    if self.cfg.show_hostname && !hostname.is_empty() {
-                        draw(
-                            &mut self.renderer,
-                            &mut self.surface,
-                            layout::clamp16(row_y),
-                            &hostname,
-                            pal.muted,
-                        )?;
-                        row_y += u * 5 / 4;
-                    }
-                    let limit = i32::from(screen.y) + sh - u;
-                    for (text, fg) in extras.iter() {
-                        if row_y > limit {
-                            break;
-                        }
-                        draw(
-                            &mut self.renderer,
-                            &mut self.surface,
-                            layout::clamp16(row_y),
-                            text,
-                            *fg,
-                        )?;
-                        row_y += u * 5 / 4;
-                    }
+                    row += spots.step;
                 }
             }
             config::Layout::Cava => {
@@ -1248,7 +1121,9 @@ impl Lock {
                     None,
                     layout::clamp16(cava_layout.as_ref().and_then(|l| l.info).unwrap_or(0)),
                 ),
-                config::Layout::Ascii => (None, ascii_info.unwrap_or(mid - line * 3)),
+                config::Layout::Ascii | config::Layout::AsciiCava => {
+                    (None, ascii_info.unwrap_or(mid - line * 3))
+                }
             };
             let (x, baseline) = match at {
                 (Some(x), baseline) => (x, baseline),
@@ -1589,10 +1464,6 @@ impl Lock {
                 repaint = true;
             }
             repaint |= self.music_tick();
-            if self.ascii_typing {
-                repaint = true;
-                self.ascii_typing = !ascii::reveal(self.started.elapsed()).2;
-            }
             // The panel follows the audio detector, the quotes loader and its
             // own fade and rotation timers; this reads atomics only.
             let mut panel_dirty = false;
@@ -1610,7 +1481,12 @@ impl Lock {
                 if let Err(e) = self.draw() {
                     eprintln!("nirulock: repaint: {e}");
                 }
-            } else if frame_due || panel_dirty {
+            } else if self.cfg.layout.is_ascii() {
+                if let Err(e) = self.ascii_tick(display_on) {
+                    eprintln!("nirulock: ascii: {e}");
+                }
+            }
+            if !repaint && (frame_due || panel_dirty) {
                 if let Err(e) = self.draw_cava_frame() {
                     eprintln!("nirulock: cava repaint: {e}");
                 }
@@ -1796,8 +1672,9 @@ impl Lock {
         {
             ms = ms.min(deadline.saturating_duration_since(instant).as_millis() as u64);
         }
-        if self.ascii_typing {
-            ms = ms.min(ascii::FRAME.as_millis() as u64);
+        let display_on = self.power.as_ref().map_or(true, cava::DisplayPower::on);
+        if let Some(next) = self.ascii_timeout(display_on) {
+            ms = ms.min(next.as_millis() as u64);
         }
         // A few milliseconds late is better than waking just before a boundary.
         (ms + 5).clamp(1, 60_000) as i32

@@ -2,16 +2,21 @@
 # font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 font_size = 22.0
 
-# minimal | terminal | runic | corner | cava | ascii
-# cava uses the active NIRUX theme and visualises system audio through CAVA.
-# ascii ("NIRUX ascii") types the NIRUX banner and "A MINIMAL X11 DESKTOP"
-# on every screen when it locks, in the theme's accent colour, with the
-# password prompt under it. Back to the spectrum: layout = "cava".
-layout = "cava"
+# ascii-cava | ascii | cava | minimal | terminal | runic | corner
+# ascii-cava (the default, "NIRUX ascii"): the NIRUX banner typed out slowly
+# on every screen like an old terminal, "A MINIMAL X11 DESKTOP" and a blinking
+# cursor under it, in the theme's accent colour; the CAVA spectrum, as wide as
+# the banner, while music plays; then the clock and the password prompt.
+# ascii: the same without the spectrum.
+# cava: a large clock above the spectrum or a quote.
+layout = "cava".
+layout = "ascii-cava"
 visualizer = true
-# What the cava layout shows where the spectrum is drawn:
+# What the cava and ascii-cava layouts show where the spectrum is drawn:
 #   "auto"   the CAVA spectrum only while music or radio plays, otherwise a
-#            quote from ~/.config/niru/quotes/ (the default)
+#            quote from ~/.config/niru/quotes/ in cava, nothing in ascii-cava
+#            (the default)
+#   "music"  the spectrum while music plays, otherwise nothing
 #   "cava"   the spectrum alone, as before 0.19 (CAVA runs whenever the display is on)
 #   "quotes" quotes alone; CAVA never starts
 #   "none"   neither (visualizer = false also means this)

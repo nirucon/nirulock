@@ -36,6 +36,8 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Auto,
+    /// The spectrum while music plays, nothing otherwise (no quotes).
+    Music,
     Cava,
     Quotes,
     None,
@@ -45,6 +47,7 @@ impl Mode {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(Self::Auto),
+            "music" => Some(Self::Music),
             "cava" => Some(Self::Cava),
             "quotes" => Some(Self::Quotes),
             "none" => Some(Self::None),
@@ -55,6 +58,7 @@ impl Mode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
+            Self::Music => "music",
             Self::Cava => "cava",
             Self::Quotes => "quotes",
             Self::None => "none",
@@ -148,6 +152,10 @@ impl Panel {
             Mode::None => Content::Blank,
             Mode::Cava => Content::Cava,
             Mode::Quotes => quote,
+            Mode::Music => match heard {
+                Heard::Playing => Content::Cava,
+                _ => Content::Blank,
+            },
             Mode::Auto => match heard {
                 Heard::Playing => Content::Cava,
                 // Undecided right after start: wait for the detector rather
@@ -394,7 +402,7 @@ impl Visual {
             Some((read, write))
         });
         let writer = || wake.as_ref().and_then(|(_, w)| w.try_clone().ok());
-        let audio = (mode == Mode::Auto).then(|| Audio::start(app, writer()));
+        let audio = matches!(mode, Mode::Auto | Mode::Music).then(|| Audio::start(app, writer()));
         let loader = matches!(mode, Mode::Auto | Mode::Quotes)
             .then(|| Loader::start(writer(), collections.to_vec()))
             .flatten();
@@ -713,7 +721,13 @@ mod tests {
 
     #[test]
     fn modes_parse() {
-        for mode in [Mode::Auto, Mode::Cava, Mode::Quotes, Mode::None] {
+        for mode in [
+            Mode::Auto,
+            Mode::Music,
+            Mode::Cava,
+            Mode::Quotes,
+            Mode::None,
+        ] {
             assert_eq!(Mode::parse(mode.as_str()), Some(mode));
         }
         assert_eq!(Mode::parse(" QUOTES "), Some(Mode::Quotes));
