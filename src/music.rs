@@ -1,11 +1,17 @@
-//! `[pause_music]`: C64 SID tunes while the screen is locked.
+//! `[pause_music]`: music while the screen is locked.
 //!
 //! Off by default. When enabled, and only for the lock reasons in `on`
 //! (default: `manual`, see [`crate::reason`]), the lock waits [`GATE_WINDOW`] after it is
-//! shown and starts `sidplayfp` only if the folder has `.sid` files and no
-//! other audio played during that window ([`StartGate`]). The tunes play in
-//! natural order and loop, each for its HVSC `Songlengths.md5` length or
-//! `track_seconds`.
+//! shown and starts the music only if the folder has tunes with a player and
+//! no other audio played during that window ([`StartGate`]).
+//!
+//! The folder (default [`DEFAULT_FOLDER`], where NIRUX installs its own
+//! chiptunes) may hold C64 SID tunes (`.sid`, played by `sidplayfp`) and
+//! audio files (`.ogg`, `.oga`, `.opus`, `.flac`, `.wav`, played by the
+//! first of `pw-play`, `ffplay` and `mpv`; see [`AudioPlayer`]), mixed. The
+//! tunes play in natural order and loop: a SID tune for its HVSC
+//! `Songlengths.md5` length or `track_seconds`, an audio file to its end
+//! ([`AUDIO_LIMIT`] at most). A tune without a player is skipped.
 //!
 //! Isolation from the lock:
 //!
@@ -15,8 +21,8 @@
 //!   `/dev/null`. sidplayfp opens `/dev/tty` for its keyboard controls; on a
 //!   session started from a text console a background process group there
 //!   is stopped by SIGTTOU/SIGTTIN, which left the lock showing a tune while
-//!   nothing played. Its arguments are a time, a subtune and a path;
-//!   nothing typed on the lock screen ever reaches it.
+//!   nothing played. Its arguments are fixed options, a time, a subtune and
+//!   a path; nothing typed on the lock screen ever reaches it.
 //! - Everything that touches the player (scanning, spawning, waiting,
 //!   killing) runs on the `nirulock-music` thread. The lock's event loop only
 //!   sends a message and signals the process group, which never blocks, and
@@ -36,6 +42,7 @@ use crate::audio::Heard;
 use crate::reason::Reason;
 use crate::sid;
 use std::{
+    ffi::OsString,
     io::{BufRead, BufReader, Write},
     os::unix::{net::UnixStream, process::CommandExt},
     path::{Path, PathBuf},
@@ -60,7 +67,9 @@ pub struct Settings {
     pub on: Vec<Reason>,
 }
 
-pub const DEFAULT_FOLDER: &str = "~/Music/SID";
+/// NIRUX installs its own music here; `folder = "~/Music/SID"` (or any
+/// folder) plays another collection.
+pub const DEFAULT_FOLDER: &str = "~/.local/share/nirux/music";
 pub const DEFAULT_TRACK_SECONDS: u32 = 180;
 
 impl Default for Settings {
@@ -133,7 +142,7 @@ impl Settings {
                 format!("{} locks", names.join(", "))
             };
             format!(
-                "on for {} (folder {}, {} s per tune without Songlengths.md5, {})",
+                "on for {} (folder {}, {} s per SID tune without Songlengths.md5, {})",
                 on,
                 self.folder,
                 self.track_seconds,
@@ -267,7 +276,7 @@ struct Shared {
     info: Mutex<Option<String>>,
     /// The playing child's process group, 0 when none.
     pgid: AtomicI32,
-    /// The folder has tunes and sidplayfp exists.
+    /// The folder has tunes with a player.
     ready: AtomicBool,
     /// The scan is done (ready or not).
     scanned: AtomicBool,
@@ -298,7 +307,7 @@ pub enum Tick {
 }
 
 impl Music {
-    /// Scan the folder and look for sidplayfp on the music thread; the
+    /// Scan the folder and look for the players on the music thread; the
     /// caller decides when to [`Music::play`].
     pub fn start(settings: &Settings) -> Option<Self> {
         let (wake, notify) = UnixStream::pair().ok()?;
@@ -369,7 +378,7 @@ impl Music {
                     return Tick::Skipped("the folder scan did not finish in time");
                 }
                 if !self.shared.ready.load(Ordering::Acquire) {
-                    return Tick::Skipped("no tunes or no sidplayfp");
+                    return Tick::Skipped("no tunes, or no player for them");
                 }
                 let _ = self.send.send(Request::Play(audio));
                 Tick::Started
@@ -493,7 +502,143 @@ fn which(name: &str) -> Option<PathBuf> {
 const MAX_TUNES: usize = 10_000;
 const MAX_DEPTH: usize = 6;
 
-/// The `.sid` files under `folder`, relative to it, in natural order.
+/// How a tune is played.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// A C64 SID tune, played by `sidplayfp`.
+    Sid,
+    /// An audio file, played by an [`AudioPlayer`].
+    Audio,
+}
+
+/// The audio file extensions, matched without case.
+pub const AUDIO_EXTENSIONS: [&str; 5] = ["ogg", "oga", "opus", "flac", "wav"];
+
+/// The kind of tune `path` is, by its extension; `None` for any other file.
+pub fn kind(path: &Path) -> Option<Kind> {
+    let extension = path.extension()?.to_str()?;
+    if extension.eq_ignore_ascii_case("sid") {
+        Some(Kind::Sid)
+    } else if AUDIO_EXTENSIONS
+        .iter()
+        .any(|e| extension.eq_ignore_ascii_case(e))
+    {
+        Some(Kind::Audio)
+    } else {
+        None
+    }
+}
+
+/// The programs that play audio files, in order of preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioPlayer {
+    /// PipeWire's own player.
+    PwPlay,
+    Ffplay,
+    Mpv,
+}
+
+impl AudioPlayer {
+    pub const ALL: [Self; 3] = [Self::PwPlay, Self::Ffplay, Self::Mpv];
+
+    pub fn program(self) -> &'static str {
+        match self {
+            Self::PwPlay => "pw-play",
+            Self::Ffplay => "ffplay",
+            Self::Mpv => "mpv",
+        }
+    }
+}
+
+/// `pw-play` streams carry no process id of their own (only its PipeWire
+/// client does, which the PulseAudio view does not show), so the stream
+/// is given its player's pid: the shell `exec`s the player, which keeps
+/// the shell's pid `$$`. `$0` is the player, `$1` the file.
+const PW_PLAY_SCRIPT: &str = r#"exec "$0" -P "{ application.process.id = $$ }" "$1""#;
+
+/// The program and arguments that play the audio `file` with `player`
+/// (found at `program`). Every player plays the file once, to its end,
+/// without a window, a terminal or output, and its stream carries the
+/// player's process id as `application.process.id`, so that the lock's own
+/// music is never "other audio" ([`crate::audio::Exclusions`]): ffplay is a
+/// PulseAudio client, and mpv is asked to be one where it can.
+pub fn audio_command(player: AudioPlayer, program: &Path, file: &Path) -> (PathBuf, Vec<OsString>) {
+    // A relative path that starts with `-` must not read as an option.
+    let file = if file.is_relative() {
+        Path::new(".").join(file).into_os_string()
+    } else {
+        file.as_os_str().to_owned()
+    };
+    let args = |options: &[&str]| -> Vec<OsString> {
+        options
+            .iter()
+            .map(OsString::from)
+            .chain(std::iter::once(file.clone()))
+            .collect()
+    };
+    match player {
+        AudioPlayer::PwPlay => (
+            PathBuf::from("/bin/sh"),
+            vec![
+                "-c".into(),
+                PW_PLAY_SCRIPT.into(),
+                program.as_os_str().to_owned(),
+                file,
+            ],
+        ),
+        AudioPlayer::Ffplay => (
+            program.to_path_buf(),
+            args(&["-nodisp", "-autoexit", "-loglevel", "quiet"]),
+        ),
+        AudioPlayer::Mpv => (
+            program.to_path_buf(),
+            // `pulse,`: PulseAudio (PipeWire's pulse server) first, as it
+            // sends the pid, then mpv's own choice.
+            args(&[
+                "--no-video",
+                "--really-quiet",
+                "--no-terminal",
+                "--ao=pulse,",
+            ]),
+        ),
+    }
+}
+
+/// The players found on `PATH`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Players {
+    /// `sidplayfp`, for SID tunes.
+    pub sid: Option<PathBuf>,
+    /// Every audio player found, in order of preference; the first plays.
+    pub audio: Vec<(AudioPlayer, PathBuf)>,
+}
+
+impl Players {
+    pub fn find() -> Self {
+        Self::find_with(which)
+    }
+
+    /// The players `lookup` finds (`which` outside the tests).
+    pub fn find_with(mut lookup: impl FnMut(&str) -> Option<PathBuf>) -> Self {
+        Self {
+            sid: lookup("sidplayfp"),
+            audio: AudioPlayer::ALL
+                .into_iter()
+                .filter_map(|player| lookup(player.program()).map(|path| (player, path)))
+                .collect(),
+        }
+    }
+
+    pub fn plays(&self, kind: Kind) -> bool {
+        match kind {
+            Kind::Sid => self.sid.is_some(),
+            Kind::Audio => !self.audio.is_empty(),
+        }
+    }
+}
+
+/// The tunes under `folder`, relative to it, in natural order: `.sid` files
+/// and audio files ([`AUDIO_EXTENSIONS`]), mixed.
 pub fn scan(folder: &Path) -> Vec<PathBuf> {
     fn walk(base: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -509,18 +654,14 @@ pub fn scan(folder: &Path) -> Vec<PathBuf> {
             }
             let path = entry.path();
             // Symlinked directories are not followed, so a loop cannot trap the scan.
-            let Ok(kind) = entry.file_type() else {
+            let Ok(file_type) = entry.file_type() else {
                 continue;
             };
-            if kind.is_dir() {
+            if file_type.is_dir() {
                 if depth < MAX_DEPTH {
                     walk(base, &path, depth + 1, out);
                 }
-            } else if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("sid"))
-                && std::fs::metadata(&path).is_ok_and(|m| m.is_file())
-            {
+            } else if kind(&path).is_some() && std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {
                 if let Ok(relative) = path.strip_prefix(base) {
                     out.push(relative.to_path_buf());
                 }
@@ -531,6 +672,52 @@ pub fn scan(folder: &Path) -> Vec<PathBuf> {
     walk(folder, folder, 0, &mut tunes);
     sid::natural_sort(&mut tunes);
     tunes
+}
+
+/// The `tunes` that `players` can play, in their order, and the lines to
+/// log about the rest. The music is ready when the list is not empty: a
+/// folder of audio files needs no sidplayfp, a folder of SID tunes no
+/// audio player.
+pub fn playable(
+    folder: &Path,
+    tunes: Vec<PathBuf>,
+    players: &Players,
+) -> (Vec<PathBuf>, Vec<String>) {
+    if tunes.is_empty() {
+        return (
+            tunes,
+            vec![format!(
+                "no tunes in {} (.sid, .ogg, .oga, .opus, .flac or .wav); no music",
+                folder.display()
+            )],
+        );
+    }
+    let (play, skip): (Vec<PathBuf>, Vec<PathBuf>) = tunes
+        .into_iter()
+        .partition(|tune| kind(tune).is_some_and(|k| players.plays(k)));
+    let sid = skip.iter().filter(|t| kind(t) == Some(Kind::Sid)).count();
+    let audio = skip.len() - sid;
+    let outcome = if play.is_empty() {
+        "no music"
+    } else {
+        "they are skipped"
+    };
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut notes = Vec::new();
+    if sid > 0 {
+        notes.push(format!(
+            "no player for {} (sidplayfp is not installed); {outcome}",
+            plural(sid, ".sid tune", ".sid tunes")
+        ));
+    }
+    if audio > 0 {
+        notes.push(format!(
+            "no player for {} (none of pw-play, ffplay or mpv is installed); {outcome}",
+            plural(audio, "audio file", "audio files")
+        ));
+    }
+    (play, notes)
 }
 
 /// `Songlengths.md5` in the folder or its `DOCUMENTS` directory (the HVSC
@@ -563,6 +750,8 @@ fn find_songlengths(folder: &Path) -> Option<sid::Songlengths> {
 
 /// A tune file larger than this is not a SID tune.
 const MAX_TUNE_BYTES: u64 = 1 << 20;
+/// An audio file plays to its end, but at most this long.
+pub const AUDIO_LIMIT: Duration = Duration::from_secs(30 * 60);
 /// Extra time before a player that does not end on its own is stopped.
 const GRACE: Duration = Duration::from_secs(3);
 /// How long the player gets to exit after TERM before KILL.
@@ -572,6 +761,20 @@ const TERM_WAIT: Duration = Duration::from_millis(500);
 const STOPPED_GIVE_UP: Duration = Duration::from_secs(2);
 /// After this many tunes in a row that end within a second, give up.
 const MAX_QUICK_FAILURES: usize = 5;
+/// After this many audio files in a row that end within a second, the next
+/// audio player (if any) takes over: `pw-play` without a PipeWire server
+/// fails at once, and ffplay or mpv may still play.
+const AUDIO_PLAYER_FAILURES: usize = 2;
+
+/// One tune, ready to start.
+struct Prepared {
+    line: String,
+    /// The player's name for the log.
+    name: &'static str,
+    /// How long it may play before it is stopped (with [`GRACE`]).
+    limit: Duration,
+    kind: Kind,
+}
 
 fn player(
     shared: &Shared,
@@ -580,26 +783,22 @@ fn player(
     receive: &mpsc::Receiver<Request>,
     mut notify: UnixStream,
 ) {
-    let program = which("sidplayfp");
+    let players = Players::find();
     let tunes = if folder.is_dir() {
         scan(folder)
     } else {
         Vec::new()
     };
-    if program.is_none() {
-        eprintln!("nirulock: pause_music: sidplayfp is not installed; no music");
-    } else if tunes.is_empty() {
-        eprintln!(
-            "nirulock: pause_music: no .sid files in {}; no music",
-            folder.display()
-        );
+    let (tunes, notes) = playable(folder, tunes, &players);
+    for note in notes {
+        eprintln!("nirulock: pause_music: {note}");
     }
-    let ready = program.is_some() && !tunes.is_empty();
+    let ready = !tunes.is_empty();
     shared.ready.store(ready, Ordering::Release);
     shared.scanned.store(true, Ordering::Release);
-    let (Some(program), true) = (program, ready) else {
+    if !ready {
         return;
-    };
+    }
     // Wait for the gate. Stop, or the lock going away, ends the thread.
     let exclusions = match receive.recv() {
         Ok(Request::Play(exclusions)) => exclusions,
@@ -608,42 +807,75 @@ fn player(
     if shared.stopped.load(Ordering::Acquire) {
         return;
     }
-    let lengths = find_songlengths(folder);
-    let engine = engine_flag(&program);
+    let has_sid = tunes.iter().any(|t| kind(t) == Some(Kind::Sid));
+    let lengths = has_sid.then(|| find_songlengths(folder)).flatten();
+    // Asked once, when the first SID tune plays.
+    let mut engine: Option<Option<&'static str>> = None;
+    let mut audio_player = 0;
+    let mut audio_failures = 0;
     let mut quick_failures = 0;
     let mut index = 0;
     loop {
         let file = folder.join(&tunes[index % tunes.len()]);
         index = (index + 1) % tunes.len();
-        let data = std::fs::metadata(&file)
-            .ok()
-            .filter(|m| m.len() <= MAX_TUNE_BYTES)
-            .and_then(|_| std::fs::read(&file).ok());
-        let Some(data) = data else {
-            quick_failures += 1;
-            if quick_failures >= MAX_QUICK_FAILURES.max(tunes.len()) {
-                eprintln!("nirulock: pause_music: the tunes cannot be read; no music");
-                return;
+        let spawned = match kind(&file) {
+            Some(Kind::Audio) => {
+                let (player, program) = &players.audio[audio_player];
+                let (program, args) = audio_command(*player, program, &file);
+                let tune = Prepared {
+                    line: sid::audio_info_line(&file),
+                    name: player.program(),
+                    limit: AUDIO_LIMIT,
+                    kind: Kind::Audio,
+                };
+                (tune, spawn_isolated(&program, &args))
             }
-            continue;
+            _ => {
+                let Some(program) = players.sid.as_deref() else {
+                    continue;
+                };
+                let data = std::fs::metadata(&file)
+                    .ok()
+                    .filter(|m| m.len() <= MAX_TUNE_BYTES)
+                    .and_then(|_| std::fs::read(&file).ok());
+                let Some(data) = data else {
+                    quick_failures += 1;
+                    if quick_failures >= MAX_QUICK_FAILURES.max(tunes.len()) {
+                        eprintln!("nirulock: pause_music: the tunes cannot be read; no music");
+                        return;
+                    }
+                    continue;
+                };
+                let header = sid::parse_header(&data);
+                let song = header.as_ref().map_or(1, |h| h.start_song);
+                let file_name = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let seconds = lengths
+                    .as_ref()
+                    .and_then(|db| db.length(&sid::md5_hex(&data), &file_name, song))
+                    .unwrap_or(track_seconds);
+                drop(data);
+                let engine = *engine.get_or_insert_with(|| engine_flag(program));
+                let tune = Prepared {
+                    line: sid::info_line(header.as_ref(), &file),
+                    name: "sidplayfp",
+                    limit: Duration::from_secs(u64::from(seconds)),
+                    kind: Kind::Sid,
+                };
+                (tune, spawn(program, engine, &file, seconds, song))
+            }
         };
-        let header = sid::parse_header(&data);
-        let song = header.as_ref().map_or(1, |h| h.start_song);
-        let file_name = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let seconds = lengths
-            .as_ref()
-            .and_then(|db| db.length(&sid::md5_hex(&data), &file_name, song))
-            .unwrap_or(track_seconds);
-        drop(data);
-        let line = sid::info_line(header.as_ref(), &file);
+        let (tune, child) = spawned;
         let started = Instant::now();
-        let mut child = match spawn(&program, engine, &file, seconds, song) {
+        let mut child = match child {
             Ok(child) => child,
             Err(e) => {
-                eprintln!("nirulock: pause_music: cannot start sidplayfp: {e}; no music");
+                eprintln!(
+                    "nirulock: pause_music: cannot start {}: {e}; no music",
+                    tune.name
+                );
                 return;
             }
         };
@@ -658,10 +890,10 @@ fn player(
             return;
         }
         if let Ok(mut info) = shared.info.lock() {
-            *info = Some(line);
+            *info = Some(tune.line);
         }
         let _ = notify.write(&[1]);
-        let deadline = started + Duration::from_secs(u64::from(seconds)) + GRACE;
+        let deadline = started + tune.limit + GRACE;
         let mut last = clocks();
         let mut stopped_since: Option<Instant> = None;
         let stop = loop {
@@ -686,7 +918,10 @@ fn player(
             if is_stopped(child.id()) {
                 let since = *stopped_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= STOPPED_GIVE_UP {
-                    eprintln!("nirulock: pause_music: sidplayfp was stopped by a signal; no music");
+                    eprintln!(
+                        "nirulock: pause_music: {} was stopped by a signal; no music",
+                        tune.name
+                    );
                     finish(shared, &mut child);
                     if let Some(exclusions) = exclusions.as_ref() {
                         exclusions.set(&[]);
@@ -709,8 +944,25 @@ fn player(
         }
         if started.elapsed() < Duration::from_secs(1) {
             quick_failures += 1;
+            if tune.kind == Kind::Audio {
+                audio_failures += 1;
+                if audio_failures >= AUDIO_PLAYER_FAILURES && audio_player + 1 < players.audio.len()
+                {
+                    audio_player += 1;
+                    audio_failures = 0;
+                    quick_failures = 0;
+                    eprintln!(
+                        "nirulock: pause_music: {} keeps failing; trying {}",
+                        tune.name,
+                        players.audio[audio_player].0.program()
+                    );
+                }
+            }
             if quick_failures >= MAX_QUICK_FAILURES {
-                eprintln!("nirulock: pause_music: sidplayfp keeps failing; no music");
+                eprintln!(
+                    "nirulock: pause_music: {} keeps failing; no music",
+                    tune.name
+                );
                 if let Ok(mut info) = shared.info.lock() {
                     *info = None;
                 }
@@ -719,6 +971,9 @@ fn player(
             }
         } else {
             quick_failures = 0;
+            if tune.kind == Kind::Audio {
+                audio_failures = 0;
+            }
         }
     }
 }
@@ -797,16 +1052,25 @@ fn spawn(
     seconds: u32,
     song: u16,
 ) -> std::io::Result<Child> {
+    let mut args: Vec<OsString> = engine.into_iter().map(OsString::from).collect();
+    args.extend([
+        "-q".into(),
+        "-os".into(),
+        format!("-o{song}").into(),
+        format!("-t{seconds}").into(),
+        file.as_os_str().to_owned(),
+    ]);
+    spawn_isolated(program, &args)
+}
+
+/// Start a player: in its own session, without a terminal or input, dying
+/// with the music thread.
+fn spawn_isolated(program: &Path, args: &[OsString]) -> std::io::Result<Child> {
     // SAFETY: getpid is async-signal-safe and has no preconditions.
     let parent = unsafe { libc::getpid() };
     let mut command = Command::new(program);
-    command.args(engine);
     command
-        .arg("-q")
-        .arg("-os")
-        .arg(format!("-o{song}"))
-        .arg(format!("-t{seconds}"))
-        .arg(file)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -1185,7 +1449,16 @@ mod tests {
     fn settings_default_off_and_validate() {
         let d = Settings::default();
         assert!(!d.enabled);
-        assert_eq!(d.folder, "~/Music/SID");
+        assert_eq!(d.folder, "~/.local/share/nirux/music");
+        assert_eq!(d.folder, DEFAULT_FOLDER);
+        assert_eq!(
+            Settings {
+                folder: "/home/n/.local/share/nirux/music".into(),
+                ..d.clone()
+            }
+            .folder_path(),
+            PathBuf::from("/home/n/.local/share/nirux/music")
+        );
         assert_eq!(d.track_seconds, 180);
         assert!(d.stop_on_display_off);
         let parse = |text: &str| Settings::from_value(&text.parse::<toml::Value>().unwrap());
@@ -1234,5 +1507,236 @@ mod tests {
         assert_eq!(tunes, ["1-a.sid", "2-b.SID", "10-c.sid", "sub/3.sid"]);
         assert!(scan(&dir.join("missing")).is_empty());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_scan_mixes_audio_files_and_sid_tunes_in_natural_order() {
+        let dir = std::env::temp_dir().join(format!("lock-mixed-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("more")).unwrap();
+        for name in [
+            "nirux-10-ten.ogg",
+            "nirux-2-two.OGG",
+            "nirux-1-ginnungagap.ogg",
+            "3-old.sid",
+            "a.flac",
+            "b.opus",
+            "c.oga",
+            "d.WAV",
+            "cover.png",
+            "e.mp3",
+            "notes.txt",
+            "more/x.sid",
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let tunes: Vec<String> = scan(&dir)
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            tunes,
+            [
+                "3-old.sid",
+                "a.flac",
+                "b.opus",
+                "c.oga",
+                "d.WAV",
+                "more/x.sid",
+                "nirux-1-ginnungagap.ogg",
+                "nirux-2-two.OGG",
+                "nirux-10-ten.ogg",
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_player_follows_the_extension() {
+        assert_eq!(kind(Path::new("a/b.sid")), Some(Kind::Sid));
+        assert_eq!(kind(Path::new("b.SID")), Some(Kind::Sid));
+        for audio in ["x.ogg", "x.OGA", "x.opus", "x.Flac", "x.wav"] {
+            assert_eq!(kind(Path::new(audio)), Some(Kind::Audio), "{audio}");
+        }
+        for other in ["x.mp3", "x.txt", "ogg", "x.sid.bak", "x"] {
+            assert_eq!(kind(Path::new(other)), None, "{other}");
+        }
+        let file = Path::new("/m/nirux-1-ginnungagap.ogg");
+        let strings = |(program, args): (PathBuf, Vec<OsString>)| {
+            let mut all = vec![program.to_string_lossy().into_owned()];
+            all.extend(args.iter().map(|a| a.to_string_lossy().into_owned()));
+            all
+        };
+        assert_eq!(
+            strings(audio_command(
+                AudioPlayer::PwPlay,
+                Path::new("/usr/bin/pw-play"),
+                file
+            )),
+            [
+                "/bin/sh",
+                "-c",
+                PW_PLAY_SCRIPT,
+                "/usr/bin/pw-play",
+                "/m/nirux-1-ginnungagap.ogg"
+            ]
+        );
+        assert_eq!(
+            strings(audio_command(
+                AudioPlayer::Ffplay,
+                Path::new("/usr/bin/ffplay"),
+                file
+            )),
+            [
+                "/usr/bin/ffplay",
+                "-nodisp",
+                "-autoexit",
+                "-loglevel",
+                "quiet",
+                "/m/nirux-1-ginnungagap.ogg"
+            ]
+        );
+        assert_eq!(
+            strings(audio_command(
+                AudioPlayer::Mpv,
+                Path::new("/usr/bin/mpv"),
+                file
+            )),
+            [
+                "/usr/bin/mpv",
+                "--no-video",
+                "--really-quiet",
+                "--no-terminal",
+                "--ao=pulse,",
+                "/m/nirux-1-ginnungagap.ogg"
+            ]
+        );
+        // A relative name is never an option.
+        let relative = audio_command(
+            AudioPlayer::Ffplay,
+            Path::new("ffplay"),
+            Path::new("-x.ogg"),
+        );
+        assert_eq!(relative.1.last().unwrap(), "./-x.ogg");
+    }
+
+    #[test]
+    fn pw_play_is_preferred_then_ffplay_then_mpv() {
+        let only = |names: &'static [&'static str]| {
+            Players::find_with(|name| {
+                names
+                    .contains(&name)
+                    .then(|| PathBuf::from(format!("/bin/{name}")))
+            })
+        };
+        let all = only(&["sidplayfp", "pw-play", "ffplay", "mpv"]);
+        assert_eq!(all.sid, Some(PathBuf::from("/bin/sidplayfp")));
+        let order: Vec<AudioPlayer> = all.audio.iter().map(|(p, _)| *p).collect();
+        assert_eq!(order, AudioPlayer::ALL);
+        assert_eq!(only(&["mpv", "ffplay"]).audio[0].0, AudioPlayer::Ffplay);
+        assert_eq!(only(&["mpv"]).audio[0].0, AudioPlayer::Mpv);
+        let none = only(&[]);
+        assert!(!none.plays(Kind::Sid) && !none.plays(Kind::Audio));
+    }
+
+    #[test]
+    fn ready_means_a_tune_with_a_player() {
+        let folder = Path::new("/m");
+        let tunes = |names: &[&str]| names.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let players = |sid: bool, audio: bool| Players {
+            sid: sid.then(|| PathBuf::from("/bin/sidplayfp")),
+            audio: if audio {
+                vec![(AudioPlayer::PwPlay, PathBuf::from("/bin/pw-play"))]
+            } else {
+                Vec::new()
+            },
+        };
+        // NIRUX's own music needs no sidplayfp.
+        let (play, notes) = playable(
+            folder,
+            tunes(&["nirux-1-a.ogg", "nirux-2-b.ogg"]),
+            &players(false, true),
+        );
+        assert_eq!(play, tunes(&["nirux-1-a.ogg", "nirux-2-b.ogg"]));
+        assert!(notes.is_empty());
+        // A SID collection needs sidplayfp, and no audio player.
+        let (play, notes) = playable(folder, tunes(&["1.sid"]), &players(true, false));
+        assert_eq!((play.len(), notes.len()), (1, 0));
+        let (play, notes) = playable(folder, tunes(&["1.sid", "2.sid"]), &players(false, true));
+        assert!(play.is_empty());
+        assert_eq!(
+            notes,
+            ["no player for 2 .sid tunes (sidplayfp is not installed); no music"]
+        );
+        let (play, notes) = playable(folder, tunes(&["1.ogg"]), &players(true, false));
+        assert!(play.is_empty());
+        assert_eq!(
+            notes,
+            ["no player for 1 audio file (none of pw-play, ffplay or mpv is installed); no music"]
+        );
+        // Mixed: the tunes without a player are skipped, the order is kept.
+        let (play, notes) = playable(
+            folder,
+            tunes(&["1.sid", "2.ogg", "3.sid"]),
+            &players(false, true),
+        );
+        assert_eq!(play, tunes(&["2.ogg"]));
+        assert_eq!(
+            notes,
+            ["no player for 2 .sid tunes (sidplayfp is not installed); they are skipped"]
+        );
+        let (play, notes) = playable(folder, tunes(&["1.sid", "2.ogg"]), &players(true, true));
+        assert_eq!((play.len(), notes.len()), (2, 0));
+        let (play, notes) = playable(folder, Vec::new(), &players(true, true));
+        assert!(play.is_empty());
+        assert_eq!(
+            notes,
+            ["no tunes in /m (.sid, .ogg, .oga, .opus, .flac or .wav); no music"]
+        );
+    }
+
+    #[test]
+    fn pw_play_gets_its_own_pid_as_the_stream_process_id() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("nirulock-pw-play-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("record");
+        let player = dir.join("pw-play");
+        std::fs::write(
+            &player,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$$\" \"$@\" > {}.tmp\nmv {}.tmp {}\nexec sleep 5\n",
+                record.display(),
+                record.display(),
+                record.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (program, args) = audio_command(AudioPlayer::PwPlay, &player, Path::new("/m/a b.ogg"));
+        let mut child = spawn_isolated(&program, &args).unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        while !record.exists() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let text = std::fs::read_to_string(&record).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let pid = child.id();
+        assert_eq!(
+            lines,
+            [
+                pid.to_string(),
+                "-P".to_string(),
+                format!("{{ application.process.id = {pid} }}"),
+                "/m/a b.ogg".to_string()
+            ]
+        );
+        let (session, tty) = session_and_tty(pid);
+        assert_eq!((session, tty), (i64::from(pid), 0));
+        signal_group(pid as i32, libc::SIGKILL);
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

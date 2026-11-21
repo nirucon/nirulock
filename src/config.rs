@@ -121,7 +121,7 @@ pub struct Config {
     /// Draw the machine's hostname under the clock. Off by default, so a
     /// locked screen in a shared place does not name the machine.
     pub show_hostname: bool,
-    /// `[pause_music]`: SID tunes while locked (off by default).
+    /// `[pause_music]`: NIRUX music or SID tunes while locked (off by default).
     pub pause_music: crate::music::Settings,
 }
 
@@ -622,7 +622,7 @@ mod tests {
         let v: toml::Value = "[pause_music]\nenabled = true".parse().unwrap();
         let c = Config::from_value(&v).unwrap();
         assert!(c.pause_music.enabled);
-        assert_eq!(c.pause_music.folder, "~/Music/SID");
+        assert_eq!(c.pause_music.folder, "~/.local/share/nirux/music");
         let v: toml::Value = "[pause_music]\ntrack_seconds = 0".parse().unwrap();
         assert!(Config::from_value(&v).is_err());
     }

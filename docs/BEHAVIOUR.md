@@ -95,15 +95,18 @@ The quote collections themselves are described in [QUOTES.md](QUOTES.md).
 Off by default. When `enabled = true`, and the lock's reason (`--reason` or
 `NIRULOCK_REASON`; see the README's Usage) is in `on` (default `["manual"]`),
 a `nirulock-music` thread scans
-`folder` (default `~/Music/SID`, recursively, at most six levels and 10,000
-files, hidden entries and symlinked directories skipped) and looks for
-`sidplayfp` on `PATH`, while the lock is already shown. The lock itself only
+`folder` (default `~/.local/share/nirux/music`, where NIRUX installs its own
+music; recursively, at most six levels and 10,000 tunes, hidden entries and
+symlinked directories skipped) for `.sid` tunes and audio files (`.ogg`,
+`.oga`, `.opus`, `.flac`, `.wav`, any case) and looks for their players on
+`PATH` (`sidplayfp`; the first of `pw-play`, `ffplay` and `mpv`), while the
+lock is already shown. The lock itself only
 reads atomics and a mutex-guarded info line; it never waits for the thread or
 the player.
 
 **Why the lock was started.** For any other reason (idle, suspend, script,
 session, or a caller that gave none) the music thread is not started at all:
-no folder scan, no `sidplayfp`, no audio detector for the gate. The trace log
+no folder scan, no player, no audio detector for the gate. The trace log
 says `pause music not started: lock reason idle`. The reason is read once at
 start, the variable is removed from the lock's environment so CAVA and the
 player do not inherit it, and an unknown or missing value is
@@ -119,21 +122,42 @@ no other stream there is certainly none. The music starts when nothing else
 played during the first 2 s after locking, or after 5 s when a quiet stream
 (an idle synthesizer) is present but never loud. Any other music in that
 window means no pause music for this lock. A display that is off only holds
-the decision; if it stays off for 5 s, there is no music. If the folder has no
-tunes or `sidplayfp` is missing, the lock logs one line and stays silent.
+the decision; if it stays off for 5 s, there is no music. The music is ready
+when at least one tune has its player: a folder of audio files needs no
+sidplayfp, a folder of SID tunes no audio player. Tunes without a player are
+skipped with one log line (`no player for 3 .sid tunes (sidplayfp is not
+installed); they are skipped`). Without any tune it can play (`no tunes in
+FOLDER`, `...; no music`) the lock stays silent.
 When `visual` is not `auto`, the music runs its own detector for the gate
 and drops it once the decision is made.
 
 **Playing.** The tunes play in natural order of their path (digit runs compare
-as numbers, letters without case), looping. Each runs as
-`sidplayfp -q -os -o<start song> -t<seconds> FILE`, where the length comes from
-the HVSC `Songlengths.md5` (by the MD5 of the whole file, or by an unambiguous
-file name) for the header's start song, otherwise `track_seconds`. A player
-that does not end on its own is stopped 3 s after that. A player that crashes
-just moves on to the next tune; five tunes in a row that end within a second
-end the music for this lock. The info line under the clock or panel comes from
-the PSID/RSID header (Latin-1, control characters removed): `♪ Title — Author ·
-Year  ·  Esc stops the music`, with the file name when the title is unknown.
+as numbers, letters without case), SID tunes and audio files mixed, looping.
+A SID tune runs as `sidplayfp -q -os -o<start song> -t<seconds> FILE`, where
+the length comes from the HVSC `Songlengths.md5` (by the MD5 of the whole
+file, or by an unambiguous file name) for the header's start song, otherwise
+`track_seconds`. An audio file plays to its natural end, 30 minutes at most,
+with the first player found:
+
+- `pw-play FILE` (PipeWire), started as `sh -c 'exec "$0" -P "{
+  application.process.id = $$ }" "$1"' pw-play FILE`: a pw-play stream
+  carries no process id of its own in the PulseAudio view, so it is given
+  the player's pid, which the shell keeps through `exec`;
+- `ffplay -nodisp -autoexit -loglevel quiet FILE` (a PulseAudio client, which
+  sends its pid);
+- `mpv --no-video --really-quiet --no-terminal --ao=pulse, FILE` (PulseAudio
+  first, for the pid, then mpv's own choice).
+
+A player that does not end on its own is stopped 3 s after its time. A player
+that crashes just moves on to the next tune; five tunes in a row that end
+within a second end the music for this lock. Two audio files in a row that
+end within a second (pw-play without a PipeWire server) hand the audio files
+to the next player found. The info line under the clock or panel comes from
+the PSID/RSID header for a SID tune (Latin-1, control characters removed):
+`♪ Title — Author · Year  ·  Esc stops the music`, with the file name when the
+title is unknown. For an audio file it comes from the file name:
+`nirux-1-ginnungagap.ogg` is `♪ Ginnungagap  ·  NIRUX 1  ·  Esc stops the
+music`, any other file its name with `-` and `_` as spaces.
 When the theme font has no `♪`, it is drawn from DejaVu Sans, or left out.
 
 **Isolation.** The player is a child of the lock owned by the same user (the
@@ -142,7 +166,7 @@ controlling terminal (so its `/dev/tty` keyboard handling cannot stop it with
 SIGTTOU on a console-started session), with stdin, stdout and
 stderr on `/dev/null`, and `PR_SET_PDEATHSIG` set to `SIGKILL`, so it dies
 with the music thread even if the lock itself is killed. Its arguments are
-only a time, a subtune and a path: nothing typed on the lock screen reaches it
+only fixed options, a time, a subtune and a path: nothing typed on the lock screen reaches it
 or any log. Authentication, the grabs and the PAM service are unchanged; the
 music adds no way to dismiss the lock.
 

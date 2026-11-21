@@ -35,10 +35,11 @@ unlocked screen.
 - Every copy of the password is wiped after use; nothing about keys is logged.
 - Optional NIRUX sounds through NIRUNOTIFY (`auth-fail`, `lock`, `unlock`,
   and a quiet typewriter click for each password key, `lock-typing`).
-- Optional pause music (`[pause_music]`, off by default): Commodore 64 SID
-  tunes from `~/Music/SID` through `sidplayfp` while the screen is locked and
-  nothing else is playing, by default only when you lock by hand (not on
-  idle, suspend or a script's lock). Esc stops it.
+- Optional pause music (`[pause_music]`, off by default): NIRUX's own
+  SID-style chiptunes from `~/.local/share/nirux/music` (or your own `.sid`
+  collection, or any `.ogg`, `.opus`, `.flac` or `.wav` files) while the screen
+  is locked and nothing else is playing, by default only when you lock by
+  hand (not on idle, suspend or a script's lock). Esc stops it.
 
 ## Requirements
 
@@ -48,9 +49,11 @@ unlocked screen.
   PipeWire (`pipewire-pulse`) or PulseAudio for music detection,
   libxkbcommon/libxkbcommon-x11 for full keyboard handling, a runic font for
   the `runic` layout.
-- Optional, for `[pause_music]`: `sidplayfp` (Debian `sidplayfp`, Void
-  `sidplayfp`, Arch: the AUR package `sidplayfp` on top of `libsidplayfp` from
-  `extra`) and `dbus-monitor` (stops the music before suspend).
+- Optional, for `[pause_music]`: for audio files (NIRUX's own music is Ogg
+  Vorbis) one of `pw-play` (PipeWire, preferred), `ffplay` (FFmpeg) or `mpv`;
+  for `.sid` tunes `sidplayfp` (Debian `sidplayfp`, Void `sidplayfp`, Arch:
+  the AUR package `sidplayfp` on top of `libsidplayfp` from `extra`); and
+  `dbus-monitor` (stops the music before suspend).
 - Building from source: Rust 1.75 or newer, a C linker, PAM development
   headers and a monospace font.
 
@@ -166,27 +169,37 @@ work is described in [docs/BEHAVIOUR.md](docs/BEHAVIOUR.md).
 
 ### Pause music
 
-With `[pause_music] enabled = true`, the lock plays Commodore 64 SID tunes
-while it is shown, but only for the lock reasons in `on` (default
+With `[pause_music] enabled = true`, the lock plays music while it is shown, but only for the lock reasons in `on` (default
 `["manual"]`: only when you lock by hand; see [Usage](#usage)). An automatic
 lock (idle, before suspend, a script or SSH) stays quiet, so a rollout that
 locks several machines at once does not start music on all of them. It waits 2 seconds after locking (up to 5 while an idle
 stream is present) and starts only if no other audio played in that time and
-the folder holds `.sid` files. The tunes play in natural order (`1-`, `2-`,
-`10-`), looping, each for its length from the HVSC `Songlengths.md5` when that
-file is in the folder (or its `DOCUMENTS` directory), otherwise for
-`track_seconds`. While the spectrum is shown it visualises the tune.
+the folder holds a tune it can play.
 
-A subtle line under the clock or panel names the tune from its PSID/RSID
-header: the title, author and year, followed by `Esc stops the music`.
+The folder is `~/.local/share/nirux/music` by default, where NIRUX installs
+its own music: eleven original SID-style chiptunes (`nirux-1-ginnungagap.ogg`
+to `nirux-11-...ogg`). It may hold Commodore 64 `.sid` tunes, played by
+`sidplayfp`, and audio files (`.ogg`, `.oga`, `.opus`, `.flac`, `.wav`), played
+by the first of `pw-play`, `ffplay` and `mpv` that is installed, in any mix. To
+play your own SID collection instead, set `folder = "~/Music/SID"`. The tunes
+play in natural order (`1-`, `2-`, `10-`), looping. An audio file plays to its
+end (30 minutes at most). A SID tune plays for its length from the HVSC
+`Songlengths.md5` when that file is in the folder (or its `DOCUMENTS`
+directory), otherwise for `track_seconds`. A tune whose player is missing is
+skipped. While the spectrum is shown it visualises the tune.
+
+A subtle line under the clock or panel names the tune, followed by `Esc stops
+the music`: for a SID tune the title, author and year from its PSID/RSID
+header, for NIRUX's music the title and its number (`♪ Ginnungagap  ·  NIRUX
+1`), for any other audio file its file name.
 
 The music stops, and stays stopped for the rest of the lock, on unlock, on
 Esc, before suspend and (unless `stop_on_display_off = false`) when the display
-goes off. The player is an ordinary `sidplayfp` child process in its own
-session (no controlling terminal) with no input; nothing typed on the lock screen reaches it, and
-the lock never waits for it. It cannot unlock anything: authentication is
-untouched. Without `sidplayfp` the lock logs one line and stays silent. Put your
-own tunes in the folder; none are shipped. Details are in
+goes off. The player is an ordinary child process in its own session (no
+controlling terminal) with no input; nothing typed on the lock screen reaches
+it, and the lock never waits for it. It cannot unlock anything: authentication
+is untouched. Without tunes or a player for them the lock logs one line and
+stays silent. Details are in
 [docs/BEHAVIOUR.md](docs/BEHAVIOUR.md#pause-music-pause_music).
 
 ## Configuration
@@ -207,8 +220,8 @@ font_size = 22.0
 
 [pause_music]              # off by default
 enabled = false
-folder = "~/Music/SID"     # .sid files, searched recursively
-track_seconds = 180        # per tune without Songlengths.md5 (5 to 3600)
+folder = "~/.local/share/nirux/music"  # NIRUX's music; or "~/Music/SID". .sid, .ogg, .opus, .flac, .wav
+track_seconds = 180        # per SID tune without Songlengths.md5 (5 to 3600)
 stop_on_display_off = true
 on = ["manual"]            # lock reasons that play: manual, idle, suspend, script, session, unspecified
 
@@ -226,7 +239,8 @@ background stays opaque.
 |---|---|
 | `~/.config/niruui/lock.toml` | Lock settings |
 | `~/.config/niru/quotes/*.txt` | Quote collections (shared with NIRUSCREENSAVER) |
-| `~/Music/SID/` | Tunes for `[pause_music]` (the `folder` setting), optionally with `Songlengths.md5` |
+| `~/.local/share/nirux/music/` | The default `[pause_music]` folder: NIRUX's own music, installed by NIRUX |
+| `~/Music/SID/` | A common place for your own SID tunes (`folder = "~/Music/SID"`), optionally with `Songlengths.md5` |
 | `/etc/pam.d/nirulock` | PAM service |
 | `~/.local/state/nirulock/trace.log` | Diagnostics; never passwords, keycodes or modifiers |
 | `~/.local/bin/nirulock` | Program |
@@ -240,9 +254,11 @@ background stays opaque.
   (`./install.sh --check`) and read `~/.local/state/nirulock/trace.log`.
 - **No spectrum.** CAVA is not installed, `visual` is `quotes` or `none`, or
   (with `auto`) nothing is playing loud enough.
-- **No pause music.** Check `enabled = true`, that `sidplayfp` is installed and
-  the folder has `.sid` files; `trace.log` says why it did not start (for
-  example "other audio is playing").
+- **No pause music.** Check `enabled = true`, that the folder has tunes
+  (NIRUX installs its music in `~/.local/share/nirux/music`) and that their
+  player is installed (`pw-play`, `ffplay` or `mpv` for audio files,
+  `sidplayfp` for `.sid`); the lock's output and `trace.log` say why it did
+  not start (for example "other audio is playing").
 - **Suspend does not happen after `Super+Shift+Escape`.** Suspend waits for
   `_NIRU_LOCK_READY`; if the lock could not grab the keyboard, it is refused.
 - **Security note.** X11 cannot isolate a lock screen from hostile clients on

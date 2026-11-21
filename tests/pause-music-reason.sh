@@ -6,8 +6,10 @@
 #
 # Runs its own Xvfb (default :180; the next free display is used when that
 # one is taken) with isolated HOME and XDG directories, no sound server and a
-# fake `sidplayfp` on PATH that only records that it was started. It plays no
-# audio and never touches another X session. Needs Xvfb, xdotool, python3.
+# fake `sidplayfp` on PATH that only records that it was started. The SID
+# tune is in the default folder, where NIRUX installs its music. A last check
+# plays a folder of .ogg files only, with a fake `pw-play`. It plays no audio
+# and never touches another X session. Needs Xvfb, xdotool, python3.
 set -eu
 
 BIN=$(cd "$(dirname "${1:?path to nirulock}")" && pwd)/$(basename "$1")
@@ -45,9 +47,10 @@ export XDG_CACHE_HOME="$T/cache" XDG_DATA_HOME="$T/data" XDG_RUNTIME_DIR="$T/run
 export PULSE_SERVER="unix:$T/no-such-server" PIPEWIRE_REMOTE="$T/no-such-server"
 export NIRULOCK_TRACE=1
 unset NIRULOCK_REASON
-mkdir -p "$HOME/Music/SID" "$XDG_CONFIG_HOME/niruui" "$XDG_STATE_HOME" "$T/bin"
+MUSIC="$HOME/.local/share/nirux/music"
+mkdir -p "$MUSIC" "$XDG_CONFIG_HOME/niruui" "$XDG_STATE_HOME" "$T/bin" "$T/ogg"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
-python3 "$HERE/fixtures/make-test-sid.py" "$HOME/Music/SID/1-test.sid" >/dev/null
+python3 "$HERE/fixtures/make-test-sid.py" "$MUSIC/1-test.sid" >/dev/null
 
 # The fake player: record the start and the pid, then wait to be stopped.
 cat > "$T/bin/sidplayfp" <<EOF
@@ -161,6 +164,43 @@ fi
 grep -q 'reason: manual' "$XDG_STATE_HOME/nirulock/trace.log" ||
   { echo "FAIL the trace does not name the reason"; fails=$((fails + 1)); }
 kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=""
+
+# Audio files only (NIRUX's own music is Ogg Vorbis): a fake pw-play plays
+# them, and its stream is given the player's pid.
+: > "$T/ogg/nirux-1-test-tune.ogg"
+cat > "$T/bin/pw-play" <<EOF
+#!/bin/sh
+echo "\$\$" >> "$T/players"
+printf '%s|' "\$\$" "\$@" > "$T/pw-args"
+echo started >> "$T/started"
+exec sleep 120
+EOF
+chmod 755 "$T/bin/pw-play"
+{
+  echo 'visual = "quotes"'
+  echo '[pause_music]'
+  echo 'enabled = true'
+  echo "folder = \"$T/ogg\""
+} > "$XDG_CONFIG_HOME/niruui/lock.toml"
+rm -f "$T/started" "$T/players" "$T/pw-args"
+"$BIN" --reason manual > "$T/lock.log" 2>&1 &
+LOCK=$!
+i=0
+while [ "$i" -lt 80 ] && [ ! -s "$T/pw-args" ]; do sleep 0.1; i=$((i + 1)); done
+if [ -s "$T/pw-args" ]; then
+  pid=$(cut -d'|' -f1 "$T/pw-args")
+  if [ "$(cat "$T/pw-args")" = "$pid|-P|{ application.process.id = $pid }|$T/ogg/nirux-1-test-tune.ogg|" ]; then
+    echo "OK   an .ogg folder plays with pw-play, and the stream carries the player's pid"
+  else
+    echo "FAIL pw-play arguments: $(cat "$T/pw-args")"; fails=$((fails + 1))
+  fi
+else
+  echo "FAIL an .ogg folder did not start pw-play"; cat "$T/lock.log"; fails=$((fails + 1))
+fi
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=""
+i=0
+while player_alive && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+if player_alive; then echo "FAIL pw-play outlived the lock"; fails=$((fails + 1)); fi
 
 if [ "$fails" -ne 0 ]; then
   echo "FAIL: $fails pause music reason checks failed"

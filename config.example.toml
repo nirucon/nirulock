@@ -42,17 +42,21 @@ show_hostname = false
 # no rune font is available; it never draws missing-glyph boxes.
 # rune_font_path = "/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf"
 
-# Pause music: Commodore 64 SID tunes while the screen is locked. Off by
-# default. Needs sidplayfp. Starts only when no other audio plays in the first
+# Pause music while the screen is locked. Off by default. Starts only when no other audio plays in the first
 # seconds after locking; Esc, unlock, suspend and (by default) the display
 # going off stop it for the rest of the lock. Only plays for the lock reasons
 # in `on` (see `nirulock --help`): by default only when you lock by hand.
 [pause_music]
 enabled = false
-# .sid files, searched recursively and played in natural order (1-, 2-, 10-).
-folder = "~/Music/SID"
-# Seconds per tune, unless the HVSC Songlengths.md5 in the folder (or its
-# DOCUMENTS directory) knows the length.
+# Searched recursively and played in natural order (1-, 2-, 10-), looping.
+# The default is NIRUX's own music (eleven chiptunes in Ogg Vorbis). The folder
+# may hold .sid tunes (played by sidplayfp) and .ogg, .oga, .opus, .flac or
+# .wav files (played by pw-play, ffplay or mpv, whichever is installed first),
+# mixed; a tune without its player is skipped. For your own SID collection:
+# folder = "~/Music/SID"
+folder = "~/.local/share/nirux/music"
+# Seconds per SID tune, unless the HVSC Songlengths.md5 in the folder (or its
+# DOCUMENTS directory) knows the length. Audio files play to their end.
 track_seconds = 180
 stop_on_display_off = true
 # Lock reasons that may play: manual (a key, the launcher, `niructl lock` in a

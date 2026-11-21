@@ -1,5 +1,6 @@
-//! Commodore 64 SID tunes for `[pause_music]`: the PSID/RSID header, the
-//! HVSC song length database, the play order and the info line.
+//! The tunes for `[pause_music]`: the PSID/RSID header of a Commodore 64 SID
+//! tune, the HVSC song length database, the play order and the info lines of
+//! SID tunes and audio files.
 //!
 //! Everything here is pure (no processes, no X) so that it can be tested;
 //! [`crate::music`] does the I/O.
@@ -100,6 +101,56 @@ pub fn info_line(header: Option<&Header>, file: &Path) -> String {
     }
     line.push_str("  ·  Esc stops the music");
     line
+}
+
+/// The info line of an audio file (NIRUX's own music, or any `.ogg`,
+/// `.flac`, ... in the folder). `nirux-N-some-name.ogg` is "♪ Some Name  ·
+/// NIRUX N"; any other file is its stem with `-` and `_` as spaces. Then
+/// "  ·  Esc stops the music", as for a SID tune.
+pub fn audio_info_line(file: &Path) -> String {
+    let stem = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let title = match nirux_tune(&stem) {
+        Some((number, name)) => format!("{}  ·  NIRUX {number}", title_case(name)),
+        None => words(&stem).join(" "),
+    };
+    format!("♪ {title}  ·  Esc stops the music")
+}
+
+/// The words of a file stem, split at `-` and `_`.
+fn words(stem: &str) -> Vec<&str> {
+    stem.split(['-', '_']).filter(|w| !w.is_empty()).collect()
+}
+
+/// `nirux-N-name`: the number (without leading zeros) and the name.
+fn nirux_tune(stem: &str) -> Option<(&str, &str)> {
+    let rest = stem
+        .get(..6)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("nirux-"))
+        .and_then(|_| stem.get(6..))?;
+    let (number, name) = rest.split_once('-')?;
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) || words(name).is_empty() {
+        return None;
+    }
+    let number = number.trim_start_matches('0');
+    Some((if number.is_empty() { "0" } else { number }, name))
+}
+
+/// "some-name" as "Some Name": each word starts with a capital letter, the
+/// rest is kept as written.
+fn title_case(name: &str) -> String {
+    words(name)
+        .iter()
+        .map(|word| {
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Natural order: digit runs compare as numbers ("2-" before "10-"), the
@@ -289,6 +340,36 @@ pub mod tests {
             h[at..at + bytes.len()].copy_from_slice(&bytes);
         }
         h
+    }
+
+    #[test]
+    fn audio_files_are_named_from_the_file_name() {
+        assert_eq!(
+            audio_info_line(Path::new("/m/nirux-1-ginnungagap.ogg")),
+            "♪ Ginnungagap  ·  NIRUX 1  ·  Esc stops the music"
+        );
+        assert_eq!(
+            audio_info_line(Path::new("nirux-11-the-long_night.OGG")),
+            "♪ The Long Night  ·  NIRUX 11  ·  Esc stops the music"
+        );
+        assert_eq!(
+            audio_info_line(Path::new("NIRUX-03-Odin-RIDES.flac")),
+            "♪ Odin RIDES  ·  NIRUX 3  ·  Esc stops the music"
+        );
+        assert_eq!(
+            audio_info_line(Path::new("/m/my_song-mix.wav")),
+            "♪ my song mix  ·  Esc stops the music"
+        );
+        // Not the NIRUX pattern: the plain stem.
+        for (file, line) in [
+            ("nirux-x-name.ogg", "♪ nirux x name  ·  Esc stops the music"),
+            ("nirux-2.ogg", "♪ nirux 2  ·  Esc stops the music"),
+            ("nirux-2-.ogg", "♪ nirux 2  ·  Esc stops the music"),
+            ("niruxen-2-a.ogg", "♪ niruxen 2 a  ·  Esc stops the music"),
+            ("ö.opus", "♪ ö  ·  Esc stops the music"),
+        ] {
+            assert_eq!(audio_info_line(Path::new(file)), line, "{file}");
+        }
     }
 
     #[test]

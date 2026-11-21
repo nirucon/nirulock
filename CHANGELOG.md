@@ -3,6 +3,36 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.29.0 (2026-11-21)
+
+### Changed
+
+- **NIRUX's own music is the default pause music.** `[pause_music]` now
+  plays from `~/.local/share/nirux/music`, where NIRUX installs eleven
+  original SID-style chiptunes (`nirux-1-ginnungagap.ogg` ...), instead of
+  `~/Music/SID`. Your own SID collection still plays with
+  `folder = "~/Music/SID"`. `enabled` stays `false` by default.
+
+### Added
+
+- The folder may hold audio files (`.ogg`, `.oga`, `.opus`, `.flac`, `.wav`,
+  any case) as well as `.sid` tunes, mixed, in natural order. Audio files
+  play to their end (30 minutes at most) with the first of `pw-play`
+  (PipeWire), `ffplay` and `mpv`; two quick failures in a row hand them to
+  the next player. `track_seconds` and `Songlengths.md5` apply to SID tunes
+  only. The player is isolated exactly like sidplayfp: its own session, no
+  terminal or input, `PR_SET_PDEATHSIG`, TERM then KILL on Esc, unlock,
+  suspend and display off.
+- The lock's own audio file stream carries the player's pid, so it never
+  counts as other audio: pw-play gets `application.process.id` as a stream
+  property (it sends none by itself), and mpv prefers its PulseAudio output.
+- The info line of an audio file: `♪ Ginnungagap  ·  NIRUX 1  ·  Esc stops
+  the music` for NIRUX's music, otherwise the file name.
+- Ready means at least one tune with its player: an `.ogg` folder needs no
+  sidplayfp. Tunes without a player are skipped with one log line, and the
+  messages name what is missing ("no tunes in FOLDER", "no player for 3
+  .sid tunes (sidplayfp is not installed)").
+
 ## 0.28.0 (2026-11-19)
 
 ### Added
