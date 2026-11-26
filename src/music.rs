@@ -1050,9 +1050,10 @@ fn play_tunes(
             Some(Kind::Audio) => {
                 let (player, program) = &players.audio[audio_player];
                 let (program, args) = audio_command(*player, program, &file);
+                let tags = read_tags(&file);
                 let tune = Prepared {
-                    line: sid::audio_info_line(&file),
-                    tune: sid::audio_tune_name(&file, &read_tags(&file)),
+                    line: sid::audio_info_line_tagged(&file, &tags),
+                    tune: sid::audio_tune_name(&file, &tags),
                     name: player.program(),
                     limit: AUDIO_LIMIT,
                     kind: Kind::Audio,

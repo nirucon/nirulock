@@ -107,7 +107,26 @@ pub fn info_line(header: Option<&Header>, file: &Path) -> String {
 /// `.flac`, ... in the folder). `nirux-N-some-name.ogg` is "♪ Some Name  ·
 /// NIRUX N"; any other file is its stem with `-` and `_` as spaces. Then
 /// "  ·  Esc stops the music", as for a SID tune.
+#[cfg(test)]
 pub fn audio_info_line(file: &Path) -> String {
+    audio_info_line_tagged(file, &Tags::default())
+}
+
+/// As [`audio_info_line`], but a file whose tags name another artist than
+/// NIRUX (Satie's Gymnopedie arranged for NIRUX, or any tagged file) is
+/// "♪ Title  ·  Artist" from its `TITLE` and `ARTIST` tags.
+pub fn audio_info_line_tagged(file: &Path, tags: &Tags) -> String {
+    let tag = |t: &Option<String>| {
+        t.as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    if let (Some(artist), Some(title)) = (tag(&tags.artist), tag(&tags.title)) {
+        if !artist.eq_ignore_ascii_case("nirux") {
+            return format!("♪ {title}  ·  {artist}  ·  Esc stops the music");
+        }
+    }
     let stem = file
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -544,6 +563,26 @@ pub mod tests {
             b.extend_from_slice(item.as_bytes());
         }
         b
+    }
+
+    #[test]
+    fn tagged_info_line_names_another_artist() {
+        let tags = Tags {
+            artist: Some("Erik Satie".into()),
+            title: Some("Gymnopedie No. 1".into()),
+        };
+        assert_eq!(
+            audio_info_line_tagged(Path::new("/m/nirux-12-gymnopedie.ogg"), &tags),
+            "♪ Gymnopedie No. 1  ·  Erik Satie  ·  Esc stops the music"
+        );
+        let nirux = Tags {
+            artist: Some("NIRUX".into()),
+            title: Some("Gimle".into()),
+        };
+        assert_eq!(
+            audio_info_line_tagged(Path::new("/m/nirux-11-gimle.ogg"), &nirux),
+            "♪ Gimle  ·  NIRUX 11  ·  Esc stops the music"
+        );
     }
 
     #[test]

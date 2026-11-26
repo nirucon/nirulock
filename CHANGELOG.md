@@ -7,6 +7,10 @@ git history.
 
 ### Added
 
+- The info line under the clock names a tagged tune by its own title and
+  artist when the artist is not NIRUX: "♪ Gymnopedie No. 1 · Erik Satie"
+  instead of "♪ Gymnopedie · NIRUX 12".
+
 - **`layout = "satie"`, a C64 tape loading screen of Erik Satie.** PRESS
   PLAY ON TAPE, SEARCHING, FOUND ERIK SATIE, and the portrait loads
   character cell by cell, first in greys while coloured loader stripes
