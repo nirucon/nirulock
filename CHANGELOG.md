@@ -3,6 +3,22 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.30.1 (2026-11-26)
+
+### Fixed
+
+- **The demo scroller names the tune by artist and title only.** It showed
+  the whole info line (`NOW PLAYING: GIMLE * NIRUX 11 * ESC STOPS THE
+  MUSIC`), and the quote that came right after it, separated like every
+  other segment, read as a description of the song. The tune is now its
+  own segment, `NOW PLAYING  NIRUX - GIMLE`, placed after the quote and
+  before the password hint, and the quote is in quotation marks with its
+  source. An Ogg Vorbis, Opus or FLAC file shows its `ARTIST` and `TITLE`
+  tags (read from the first 64 KiB; a `COMMENT` or `DESCRIPTION` tag never
+  shows), otherwise its file name (`nirux-11-gimle.ogg` is `NIRUX -
+  GIMLE`); a SID tune shows `AUTHOR - TITLE` from its header. The
+  info line of the other layouts is unchanged.
+
 ## 0.30.0 (2026-11-26)
 
 ### Changed

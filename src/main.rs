@@ -194,6 +194,8 @@ struct Lock {
     music_audio: Option<audio::Audio>,
     /// The info line of the tune that plays.
     music_info: Option<String>,
+    /// The tune that plays as "Artist - Title", for the demo scroller.
+    music_tune: Option<String>,
     info_renderer: core::TextRenderer,
     /// The note for the info line from another font, when the theme font
     /// has none.
@@ -328,6 +330,7 @@ impl Lock {
             reason,
             music_audio,
             music_info: None,
+            music_tune: None,
             info_renderer,
             note_renderer,
             state: State::Prompt,
@@ -1614,6 +1617,7 @@ impl Lock {
         }
         self.music_audio = None;
         self.music_info = None;
+        self.music_tune = None;
         // Back to the quote now, unless other music is playing.
         if let Some(visual) = self.visual.as_mut() {
             visual.own_audio_stopped();
@@ -1642,6 +1646,7 @@ impl Lock {
             || self.power.as_ref().map_or(true, cava::DisplayPower::on);
         let tick = music.tick(other, display_on, exclusions);
         let info = music.info();
+        let tune = music.tune();
         let stopped = music.stopped();
         match tick {
             music::Tick::Nothing => {}
@@ -1661,6 +1666,7 @@ impl Lock {
                 self.trace("pause music stopped: before suspend");
             }
             self.music_info = info;
+            self.music_tune = tune;
             return true;
         }
         false

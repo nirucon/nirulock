@@ -119,6 +119,133 @@ pub fn audio_info_line(file: &Path) -> String {
     format!("♪ {title}  ·  Esc stops the music")
 }
 
+/// The tune as "Artist - Title" for the demo layout's scroller and the
+/// attract layout's HUD: only who and what, never the info line's numbers,
+/// years or hints. A SID tune is "Author - Title" from its header (the
+/// title alone without an author, the file name without a title).
+pub fn tune_name(header: Option<&Header>, file: &Path) -> String {
+    let title = header
+        .and_then(|h| known(&h.title))
+        .map_or_else(|| words(&stem_of(file)).join(" "), str::to_string);
+    match header.and_then(|h| known(&h.author)) {
+        Some(author) => format!("{author} - {title}"),
+        None => title,
+    }
+}
+
+/// An audio file as "Artist - Title": the `ARTIST` and `TITLE` tags when
+/// the file has them (`tags`, from [`vorbis_tags`]); otherwise
+/// `nirux-N-some-name.ogg` is "NIRUX - Some Name" and any other file its
+/// stem with `-` and `_` as spaces (a `TITLE` alone without an `ARTIST`
+/// is shown alone).
+pub fn audio_tune_name(file: &Path, tags: &Tags) -> String {
+    let stem = stem_of(file);
+    let tag = |t: &Option<String>| {
+        t.as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    match (tag(&tags.artist), tag(&tags.title)) {
+        (Some(artist), Some(title)) => format!("{artist} - {title}"),
+        (None, Some(title)) if nirux_tune(&stem).is_none() => title,
+        _ => match nirux_tune(&stem) {
+            Some((_, name)) => format!("NIRUX - {}", title_case(name)),
+            None => words(&stem).join(" "),
+        },
+    }
+}
+
+fn stem_of(file: &Path) -> String {
+    file.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The `ARTIST` and `TITLE` of an audio file's Vorbis comments.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tags {
+    pub artist: Option<String>,
+    pub title: Option<String>,
+}
+
+/// How much of an audio file [`vorbis_tags`] looks at: the comment header
+/// of Ogg Vorbis, Opus and FLAC is near the start.
+pub const TAG_BYTES: usize = 64 * 1024;
+
+/// The Vorbis comments in the first bytes of an Ogg Vorbis, Ogg Opus or
+/// FLAC file. Anything else, or a comment block that does not fit or does
+/// not parse, gives no tags (and the caller falls back to the file name).
+/// Only `ARTIST` and `TITLE` are read: a `COMMENT` or `DESCRIPTION` never
+/// shows.
+pub fn vorbis_tags(data: &[u8]) -> Tags {
+    let block = if data.starts_with(b"OggS") {
+        find(data, b"\x03vorbis")
+            .map(|at| at + 7)
+            .or_else(|| find(data, b"OpusTags").map(|at| at + 8))
+    } else if data.starts_with(b"fLaC") {
+        flac_comments(data)
+    } else {
+        None
+    };
+    block
+        .and_then(|at| data.get(at..))
+        .and_then(comments)
+        .unwrap_or_default()
+}
+
+fn find(data: &[u8], needle: &[u8]) -> Option<usize> {
+    data.windows(needle.len()).position(|w| w == needle)
+}
+
+/// The start of a FLAC file's VORBIS_COMMENT block.
+fn flac_comments(data: &[u8]) -> Option<usize> {
+    let mut at = 4;
+    loop {
+        let head = data.get(at..at + 4)?;
+        let kind = head[0] & 0x7f;
+        let len = usize::from(head[1]) << 16 | usize::from(head[2]) << 8 | usize::from(head[3]);
+        if kind == 4 {
+            return Some(at + 4);
+        }
+        if head[0] & 0x80 != 0 {
+            return None;
+        }
+        at += 4 + len;
+    }
+}
+
+/// A Vorbis comment block: vendor string, count, `KEY=value` strings, all
+/// lengths 32-bit little endian.
+fn comments(data: &[u8]) -> Option<Tags> {
+    let le32 = |at: usize| -> Option<usize> {
+        let b = data.get(at..at + 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    };
+    let mut at = 4usize.checked_add(le32(0)?)?;
+    let count = le32(at)?.min(1024);
+    at += 4;
+    let mut tags = Tags::default();
+    for _ in 0..count {
+        let len = le32(at)?;
+        let text = data.get(at + 4..(at + 4).checked_add(len)?)?;
+        at += 4 + len;
+        let Ok(text) = std::str::from_utf8(text) else {
+            continue;
+        };
+        let Some((key, value)) = text.split_once('=') else {
+            continue;
+        };
+        let value: String = value.chars().filter(|c| !c.is_control()).take(80).collect();
+        if key.eq_ignore_ascii_case("ARTIST") && tags.artist.is_none() {
+            tags.artist = Some(value);
+        } else if key.eq_ignore_ascii_case("TITLE") && tags.title.is_none() {
+            tags.title = Some(value);
+        }
+    }
+    Some(tags)
+}
+
 /// The words of a file stem, split at `-` and `_`.
 fn words(stem: &str) -> Vec<&str> {
     stem.split(['-', '_']).filter(|w| !w.is_empty()).collect()
@@ -340,6 +467,118 @@ pub mod tests {
             h[at..at + bytes.len()].copy_from_slice(&bytes);
         }
         h
+    }
+
+    #[test]
+    fn tune_names_are_artist_and_title_only() {
+        let none = Tags::default();
+        assert_eq!(
+            audio_tune_name(Path::new("/m/nirux-11-gimle.ogg"), &none),
+            "NIRUX - Gimle"
+        );
+        // Tags win over the file name: NIRUX's Gymnopedie is by Satie.
+        let tagged = Tags {
+            artist: Some("Erik Satie".into()),
+            title: Some("Gymnopedie No. 1".into()),
+        };
+        assert_eq!(
+            audio_tune_name(Path::new("nirux-12-gymnopedie.ogg"), &tagged),
+            "Erik Satie - Gymnopedie No. 1"
+        );
+        assert_eq!(
+            audio_tune_name(Path::new("nirux-3-the-long_night.ogg"), &none),
+            "NIRUX - The Long Night"
+        );
+        let gimle = Tags {
+            artist: Some("NIRUX".into()),
+            title: Some("Gimle".into()),
+        };
+        assert_eq!(
+            audio_tune_name(Path::new("nirux-11-gimle.ogg"), &gimle),
+            "NIRUX - Gimle"
+        );
+        assert_eq!(
+            audio_tune_name(Path::new("my_song-mix.flac"), &tagged),
+            "Erik Satie - Gymnopedie No. 1"
+        );
+        assert_eq!(
+            audio_tune_name(Path::new("my_song-mix.flac"), &none),
+            "my song mix"
+        );
+        let title_only = Tags {
+            artist: Some("  ".into()),
+            title: Some("Alone".into()),
+        };
+        assert_eq!(audio_tune_name(Path::new("x.ogg"), &title_only), "Alone");
+        let h = parse_header(&header(
+            b"PSID",
+            "Comic Bakery",
+            "Martin Galway",
+            "1984 Imagine",
+        ));
+        assert_eq!(
+            tune_name(h.as_ref(), Path::new("a.sid")),
+            "Martin Galway - Comic Bakery"
+        );
+        let h = parse_header(&header(b"PSID", "<?>", "<?>", "1984"));
+        assert_eq!(
+            tune_name(h.as_ref(), Path::new("/m/my_tune.sid")),
+            "my tune"
+        );
+        assert_eq!(tune_name(None, Path::new("/m/1-test.sid")), "1 test");
+        for name in [
+            audio_tune_name(Path::new("nirux-11-gimle.ogg"), &none),
+            tune_name(h.as_ref(), Path::new("a.sid")),
+        ] {
+            assert!(!name.contains("Esc") && !name.contains('·') && !name.contains('♪'));
+        }
+    }
+
+    fn comment_block(items: &[&str]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&6u32.to_le_bytes());
+        b.extend_from_slice(b"vendor");
+        b.extend_from_slice(&(items.len() as u32).to_le_bytes());
+        for item in items {
+            b.extend_from_slice(&(item.len() as u32).to_le_bytes());
+            b.extend_from_slice(item.as_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn vorbis_comments_give_artist_and_title_only() {
+        let items = [
+            "DESCRIPTION=A minor, 64 BPM: a calm, hopeful close",
+            "title=Gimle",
+            "ARTIST=NIRUX",
+            "ALBUM=NIRUX music",
+        ];
+        let mut ogg = b"OggS\0\x02junk\x01vorbis....OggS\0\0\x03vorbis".to_vec();
+        ogg.extend(comment_block(&items));
+        let want = Tags {
+            artist: Some("NIRUX".into()),
+            title: Some("Gimle".into()),
+        };
+        assert_eq!(vorbis_tags(&ogg), want);
+        let mut opus = b"OggS....OpusHead....OggS....OpusTags".to_vec();
+        opus.extend(comment_block(&items));
+        assert_eq!(vorbis_tags(&opus), want);
+        // FLAC: STREAMINFO, then the comments as the last block.
+        let mut flac = b"fLaC".to_vec();
+        flac.extend([0, 0, 0, 2, 9, 9]);
+        let block = comment_block(&items);
+        flac.extend([0x84, 0, 0, block.len() as u8]);
+        flac.extend(block);
+        assert_eq!(vorbis_tags(&flac), want);
+        // Truncated, foreign or empty data: no tags, no panic.
+        assert_eq!(vorbis_tags(&ogg[..ogg.len() - 10]), Tags::default());
+        assert_eq!(vorbis_tags(b"RIFF....WAVE"), Tags::default());
+        assert_eq!(vorbis_tags(b""), Tags::default());
+        assert_eq!(vorbis_tags(b"fLaC\0\0"), Tags::default());
+        let mut huge = b"OggS\x03vorbis".to_vec();
+        huge.extend(u32::MAX.to_le_bytes());
+        assert_eq!(vorbis_tags(&huge), Tags::default());
     }
 
     #[test]

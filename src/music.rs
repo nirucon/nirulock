@@ -297,8 +297,9 @@ enum Request {
 }
 
 struct Shared {
-    /// The info line of the tune that plays, if any.
-    info: Mutex<Option<String>>,
+    /// The info line of the tune that plays and its "Artist - Title", if
+    /// any.
+    info: Mutex<Option<(String, String)>>,
     /// The playing child's process group, 0 when none.
     pgid: AtomicI32,
     /// The folder has tunes with a player.
@@ -453,7 +454,23 @@ impl Music {
         if self.stopped() {
             return None;
         }
-        self.shared.info.lock().ok().and_then(|info| info.clone())
+        self.shared
+            .info
+            .lock()
+            .ok()
+            .and_then(|info| info.as_ref().map(|i| i.0.clone()))
+    }
+
+    /// The tune that plays as "Artist - Title" ([`sid::tune_name`]).
+    pub fn tune(&self) -> Option<String> {
+        if self.stopped() {
+            return None;
+        }
+        self.shared
+            .info
+            .lock()
+            .ok()
+            .and_then(|info| info.as_ref().map(|i| i.1.clone()))
     }
 
     pub fn stopped(&self) -> bool {
@@ -902,8 +919,24 @@ const MAX_QUICK_FAILURES: usize = 5;
 const AUDIO_PLAYER_FAILURES: usize = 2;
 
 /// One tune, ready to start.
+/// The Vorbis comments of an audio file, from its first
+/// [`sid::TAG_BYTES`] bytes.
+fn read_tags(file: &Path) -> sid::Tags {
+    use std::io::Read;
+    let mut data = Vec::new();
+    match std::fs::File::open(file) {
+        Ok(f) => {
+            let _ = f.take(sid::TAG_BYTES as u64).read_to_end(&mut data);
+            sid::vorbis_tags(&data)
+        }
+        Err(_) => sid::Tags::default(),
+    }
+}
+
 struct Prepared {
     line: String,
+    /// "Artist - Title".
+    tune: String,
     /// The player's name for the log.
     name: &'static str,
     /// How long it may play before it is stopped (with [`GRACE`]).
@@ -975,6 +1008,7 @@ fn player(
                 let (program, args) = audio_command(*player, program, &file);
                 let tune = Prepared {
                     line: sid::audio_info_line(&file),
+                    tune: sid::audio_tune_name(&file, &read_tags(&file)),
                     name: player.program(),
                     limit: AUDIO_LIMIT,
                     kind: Kind::Audio,
@@ -1011,6 +1045,7 @@ fn player(
                 let engine = *engine.get_or_insert_with(|| engine_flag(program));
                 let tune = Prepared {
                     line: sid::info_line(header.as_ref(), &file),
+                    tune: sid::tune_name(header.as_ref(), &file),
                     name: "sidplayfp",
                     limit: Duration::from_secs(u64::from(seconds)),
                     kind: Kind::Sid,
@@ -1041,7 +1076,7 @@ fn player(
             return;
         }
         if let Ok(mut info) = shared.info.lock() {
-            *info = Some(tune.line);
+            *info = Some((tune.line, tune.tune));
         }
         let _ = notify.write(&[1]);
         let deadline = started + tune.limit + GRACE;

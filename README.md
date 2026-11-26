@@ -159,8 +159,11 @@ is built from NIRUSID's own 8x8 pixel font (drawn for NIRUSID, not the
 Commodore character set), one block per font pixel, and wobbles row by row
 while four raster bars swing up and down behind it. A sine scroller along the
 bottom carries the date and time, how long the screen has been locked, the
-hostname (only with `show_hostname = true`), the tune that plays and a quote
-from the `quotes` collections; Swedish letters are shown as their plain
+hostname (only with `show_hostname = true`), a quote from the `quotes`
+collections in quotation marks with its source, and the tune that plays as
+its own segment, artist and title only (`NOW PLAYING  NIRUX - GIMLE`; a SID
+tune shows its author and title, another audio file its `ARTIST` and `TITLE`
+tags or its file name); Swedish letters are shown as their plain
 letters (Å and Ä as A, Ö as O). While music plays, the bars and the logo
 flash on the beat (the CAVA spectrum is used for that and never drawn).
 

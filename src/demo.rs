@@ -504,6 +504,38 @@ fn scroller(
     }
 }
 
+/// The scroller's text: NIRUX, the `facts` (clock, away time, hostname),
+/// the quote in quotation marks with its attribution, then the tune as
+/// its own segment, `NOW PLAYING  ARTIST - TITLE`, and the password hint.
+/// The quote and the tune never touch: a quote right after the tune read
+/// as the tune's description. Plain uppercase ASCII for the pixel font.
+pub fn scroller_text(
+    facts: &[String],
+    quote: Option<(String, String)>,
+    tune: Option<&str>,
+) -> String {
+    let mut parts = vec!["NIRUX".to_string()];
+    parts.extend(facts.iter().cloned());
+    if let Some((words, attribution)) = quote {
+        let words = words.trim().trim_matches(['"', '\u{201c}', '\u{201d}']);
+        let mut q = format!("\"{words}\"");
+        if !attribution.trim().is_empty() {
+            let who = attribution
+                .trim()
+                .trim_start_matches(['-', '\u{2014}', '\u{2013}', ' ']);
+            q.push_str("  - ");
+            q.push_str(who);
+        }
+        parts.push(q);
+    }
+    if let Some(tune) = tune.map(str::trim).filter(|t| !t.is_empty()) {
+        parts.push(format!("NOW PLAYING  {tune}"));
+    }
+    parts.push("TYPE YOUR PASSWORD TO COME BACK".into());
+    let text = format!("{}   ***", parts.join("   ***   "));
+    pixfont::plain(&text).to_uppercase()
+}
+
 /// The frame interval for `pixels` band pixels a frame.
 pub fn frame_for(pixels: i64) -> Duration {
     if pixels <= FULL_RATE_PIXELS {
@@ -592,10 +624,9 @@ impl Lock {
     }
 
     /// The scroller's next text: the clock, the away time, the hostname
-    /// when it may show, the tune and a quote.
+    /// when it may show, a quote and the tune ([`scroller_text`]).
     fn demo_text(&mut self) -> String {
-        let mut parts = vec![
-            "NIRUX".to_string(),
+        let mut facts = vec![
             core::clock_text(chrono::Local::now()),
             format!(
                 "LOCKED, {}",
@@ -605,27 +636,15 @@ impl Lock {
         if self.cfg.show_hostname {
             let host = core::hostname();
             if !host.is_empty() {
-                parts.push(host);
+                facts.push(host);
             }
         }
-        if let Some(info) = self.music_info.as_ref() {
-            parts.push(format!("NOW PLAYING: {info}"));
-        }
-        if let Some(quote) = self
+        let quote = self
             .visual
             .as_mut()
             .and_then(crate::visual::Visual::next_quote)
-        {
-            let mut words = quote.lines.join(" ");
-            for line in quote.attribution {
-                words.push_str("   ");
-                words.push_str(&line);
-            }
-            parts.push(words);
-        }
-        parts.push("TYPE YOUR PASSWORD TO COME BACK".into());
-        let text = format!("{}   ***", parts.join("   ***   "));
-        pixfont::plain(&text).to_uppercase()
+            .map(|q| (q.lines.join(" "), q.attribution.join(", ")));
+        scroller_text(&facts, quote, self.music_tune.as_deref())
     }
 
     /// Draw both bands of every monitor as they are now into the backing
@@ -931,6 +950,36 @@ mod tests {
         assert!(f < 0.01, "{f}");
         // Silence never flashes.
         assert_eq!(beat(0.0, 0.0, 0.0, 0.04).0, 0.0);
+    }
+
+    #[test]
+    fn the_scroller_names_the_tune_apart_from_the_quote() {
+        let facts = vec![
+            "2026-11-26  06:19".to_string(),
+            "LOCKED, AFK 0 MIN".to_string(),
+        ];
+        let quote = Some((
+            "Keep thyself then simple, good, pure.".to_string(),
+            "- Marcus Aurelius, Meditations VI.30".to_string(),
+        ));
+        let text = scroller_text(&facts, quote, Some("NIRUX - Gimle"));
+        assert_eq!(
+            text,
+            "NIRUX   ***   2026-11-26  06:19   ***   LOCKED, AFK 0 MIN   ***   \
+             \"KEEP THYSELF THEN SIMPLE, GOOD, PURE.\"  - MARCUS AURELIUS, MEDITATIONS VI.30   ***   \
+             NOW PLAYING  NIRUX - GIMLE   ***   TYPE YOUR PASSWORD TO COME BACK   ***"
+        );
+        // The tune segment is only artist and title, and nothing but the
+        // password hint follows it.
+        let after = text.split("NOW PLAYING  ").nth(1).unwrap();
+        assert!(after.starts_with("NIRUX - GIMLE   ***   TYPE YOUR PASSWORD"));
+        assert!(!text.contains("ESC STOPS") && !text.contains("NIRUX 11"));
+        // Without music or quotes.
+        assert_eq!(
+            scroller_text(&[], None, None),
+            "NIRUX   ***   TYPE YOUR PASSWORD TO COME BACK   ***"
+        );
+        assert!(!scroller_text(&[], None, Some("  ")).contains("NOW PLAYING"));
     }
 
     #[test]
