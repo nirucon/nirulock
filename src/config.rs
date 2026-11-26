@@ -20,6 +20,8 @@ pub enum Layout {
     Ascii,
     /// NIRUX ascii with the spectrum under it while music plays (default).
     AsciiCava,
+    /// A C64 demo: a chunky pixel logo over raster bars, a sine scroller.
+    Demo,
 }
 
 impl Layout {
@@ -28,9 +30,16 @@ impl Layout {
         matches!(self, Self::Ascii | Self::AsciiCava)
     }
 
-    /// The layouts with a spectrum or quote panel.
+    /// The layouts with a spectrum or quote panel. `demo` has none of its
+    /// own, but its scroller carries the quotes and it flashes to the
+    /// spectrum.
     pub fn has_panel(self) -> bool {
-        matches!(self, Self::Cava | Self::AsciiCava)
+        matches!(self, Self::Cava | Self::AsciiCava | Self::Demo)
+    }
+
+    /// The layouts that animate and so follow the display power.
+    pub fn animates(self) -> bool {
+        matches!(self, Self::Ascii | Self::AsciiCava | Self::Demo)
     }
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -42,6 +51,7 @@ impl Layout {
             "cava" => Some(Self::Cava),
             "ascii" => Some(Self::Ascii),
             "ascii-cava" => Some(Self::AsciiCava),
+            "demo" => Some(Self::Demo),
             _ => None,
         }
     }
@@ -55,6 +65,7 @@ impl Layout {
             Self::Cava => "cava",
             Self::Ascii => "ascii",
             Self::AsciiCava => "ascii-cava",
+            Self::Demo => "demo",
         }
     }
 }
@@ -121,7 +132,7 @@ pub struct Config {
     /// Draw the machine's hostname under the clock. Off by default, so a
     /// locked screen in a shared place does not name the machine.
     pub show_hostname: bool,
-    /// `[pause_music]`: NIRUX music or SID tunes while locked (off by default).
+    /// `[pause_music]`: NIRUX music or SID tunes while locked (on by default, for manual locks).
     pub pause_music: crate::music::Settings,
 }
 
@@ -381,7 +392,7 @@ impl Config {
         }
         if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
             cfg.layout = Layout::parse(layout).ok_or_else(|| {
-                "layout must be ascii-cava, ascii, cava, minimal, terminal, runic or corner"
+                "layout must be ascii-cava, ascii, demo, cava, minimal, terminal, runic or corner"
                     .to_string()
             })?;
         }
@@ -591,7 +602,20 @@ mod tests {
         assert_eq!(Layout::Ascii.as_str(), "ascii");
         assert_eq!(Layout::parse("ascii-cava"), Some(Layout::AsciiCava));
         assert_eq!(Layout::AsciiCava.as_str(), "ascii-cava");
+        assert_eq!(Layout::parse("Demo"), Some(Layout::Demo));
+        assert_eq!(Layout::Demo.as_str(), "demo");
+        assert!(Layout::Demo.animates() && Layout::Demo.has_panel());
+        assert!(!Layout::Demo.is_ascii());
         assert!(Layout::parse("noir-ish").is_none());
+        // The default stays NIRUX ascii; demo is chosen in lock.toml.
+        let c = |text: &str| Config::from_value(&text.parse().unwrap());
+        assert_eq!(c("").unwrap().layout, Layout::AsciiCava);
+        let demo = c("layout = \"demo\"").unwrap();
+        assert_eq!(demo.layout, Layout::Demo);
+        assert_eq!(demo.panel_mode(), crate::visual::Mode::Auto);
+        assert!(demo.describe().contains("\nlayout: demo\n"));
+        let err = c("layout = \"amiga\"").unwrap_err().to_string();
+        assert!(err.contains("demo"), "{err}");
     }
 
     #[test]
@@ -634,6 +658,18 @@ mod tests {
         assert_eq!(c.pause_music.folder, "~/.local/share/nirux/music");
         let v: toml::Value = "[pause_music]\ntrack_seconds = 0".parse().unwrap();
         assert!(Config::from_value(&v).is_err());
+    }
+
+    #[test]
+    fn the_example_config_parses_and_matches_the_defaults() {
+        let v: toml::Value = include_str!("../config.example.toml")
+            .parse()
+            .expect("config.example.toml is valid TOML");
+        let c = Config::from_value(&v).expect("config.example.toml is valid");
+        let d = Config::default();
+        assert_eq!(c.layout, d.layout);
+        assert_eq!(c.pause_music, d.pause_music);
+        assert_eq!(c.prompt_echo, d.prompt_echo);
     }
 
     #[test]

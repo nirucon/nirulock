@@ -531,6 +531,26 @@ impl Visual {
         }
     }
 
+    /// The next quote from the collections, for a layout that shows quotes
+    /// its own way (NIRULOCK's `demo` scroller); `None` without quotes.
+    #[allow(dead_code)]
+    pub fn next_quote(&mut self) -> Option<Quote> {
+        self.pick();
+        self.quote.clone()
+    }
+
+    /// The live spectrum's bar heights (0..1) while the panel would show it
+    /// (music plays and the display is on), for a layout that only follows
+    /// the beat. Reading it consumes the frame like a paint does.
+    #[allow(dead_code)]
+    pub fn spectrum(&mut self) -> Option<&[f32]> {
+        if !self.display_on || self.panel.shown() != Content::Cava {
+            return None;
+        }
+        self.painted = Instant::now();
+        self.cava.as_mut().map(|cava| cava.values())
+    }
+
     /// True once after a change that needs a single repaint.
     pub fn take_repaint(&mut self) -> bool {
         std::mem::take(&mut self.repaint)

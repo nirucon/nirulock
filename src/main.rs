@@ -17,12 +17,14 @@ mod audio;
 mod cava;
 mod config;
 mod core;
+mod demo;
 mod display;
 mod keyboard;
 mod layout;
 mod music;
 mod palette;
 mod pam;
+mod pixfont;
 mod quotes;
 mod reason;
 mod secret;
@@ -211,6 +213,8 @@ struct Lock {
     outputs: Vec<display::Area>,
     /// The `ascii` layouts' banners, typing and cursor.
     ascii: ascii::State,
+    /// The `demo` layout's scene.
+    demo: demo::State,
     spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
@@ -275,7 +279,7 @@ impl Lock {
             .then(|| audio::Audio::start("nirulock", None));
         // The ascii layouts follow it too: the cursor does not blink for a
         // display that is off.
-        let power = (visual.is_some() || music.is_some() || cfg.layout.is_ascii())
+        let power = (visual.is_some() || music.is_some() || cfg.layout.animates())
             .then(|| cava::DisplayPower::new(&surface.c));
         let info_size = (cfg.font_size * 0.8).max(8.0);
         let info_renderer = renderer.at_size(info_size);
@@ -338,6 +342,7 @@ impl Lock {
             prompt_area,
             outputs: Vec::new(),
             ascii: ascii::State::default(),
+            demo: demo::State::default(),
             spectrum_rect: None,
             ready: false,
             caps,
@@ -1045,6 +1050,54 @@ impl Lock {
                     row += spots.step;
                 }
             }
+            config::Layout::Demo => {
+                let spots = self.demo_layout(area);
+                self.demo_paint()?;
+                ascii_info = Some(spots.info);
+                self.clock_renderer.draw_centred(
+                    &self.surface.c,
+                    self.surface.gc,
+                    self.surface.back,
+                    self.surface.depth,
+                    centre,
+                    spots.clock,
+                    &clock,
+                    pal.foreground,
+                    pal.background,
+                )?;
+                entry(&mut self.renderer, &mut self.surface, spots.entry)?;
+                draw(
+                    &mut self.renderer,
+                    &mut self.surface,
+                    spots.away,
+                    &core::away_text(away),
+                    pal.border.max(pal.focus),
+                )?;
+                let mut row = spots.rows;
+                if self.cfg.show_hostname && !hostname.is_empty() && row <= spots.limit {
+                    draw(
+                        &mut self.renderer,
+                        &mut self.surface,
+                        layout::clamp16(row),
+                        &hostname,
+                        pal.muted,
+                    )?;
+                    row += spots.step;
+                }
+                for (text, fg) in extras.iter() {
+                    if row > spots.limit {
+                        break;
+                    }
+                    draw(
+                        &mut self.renderer,
+                        &mut self.surface,
+                        layout::clamp16(row),
+                        text,
+                        *fg,
+                    )?;
+                    row += spots.step;
+                }
+            }
             config::Layout::Cava => {
                 let l = cava_layout.as_ref().expect("the cava layout was computed");
                 let y = layout::clamp16;
@@ -1121,7 +1174,7 @@ impl Lock {
                     None,
                     layout::clamp16(cava_layout.as_ref().and_then(|l| l.info).unwrap_or(0)),
                 ),
-                config::Layout::Ascii | config::Layout::AsciiCava => {
+                config::Layout::Ascii | config::Layout::AsciiCava | config::Layout::Demo => {
                     (None, ascii_info.unwrap_or(mid - line * 3))
                 }
             };
@@ -1485,8 +1538,15 @@ impl Lock {
                 if let Err(e) = self.ascii_tick(display_on) {
                     eprintln!("nirulock: ascii: {e}");
                 }
+            } else if self.cfg.layout == config::Layout::Demo {
+                if let Err(e) = self.demo_tick(display_on) {
+                    eprintln!("nirulock: demo: {e}");
+                }
             }
-            if !repaint && (frame_due || panel_dirty) {
+            // The demo has no panel to paint: it reads the spectrum in its
+            // own frames.
+            let demo = self.cfg.layout == config::Layout::Demo;
+            if !repaint && !demo && (frame_due || panel_dirty) {
                 if let Err(e) = self.draw_cava_frame() {
                     eprintln!("nirulock: cava repaint: {e}");
                 }
@@ -1502,7 +1562,12 @@ impl Lock {
             }
             // The next spectrum frame normally wakes the loop through its
             // descriptor; the deadline covers fades and a stalled CAVA.
-            let timeout = match self.visual.as_ref().and_then(visual::Visual::next_frame) {
+            let panel_frame = self
+                .visual
+                .as_ref()
+                .and_then(visual::Visual::next_frame)
+                .filter(|_| !demo);
+            let timeout = match panel_frame {
                 Some(due) => {
                     let due = due.saturating_duration_since(Instant::now());
                     (due.as_micros().div_ceil(1000) as i32).min(self.idle_timeout())
@@ -1674,6 +1739,9 @@ impl Lock {
         }
         let display_on = self.power.as_ref().map_or(true, cava::DisplayPower::on);
         if let Some(next) = self.ascii_timeout(display_on) {
+            ms = ms.min(next.as_millis() as u64);
+        }
+        if let Some(next) = self.demo_timeout(display_on) {
             ms = ms.min(next.as_millis() as u64);
         }
         // A few milliseconds late is better than waking just before a boundary.

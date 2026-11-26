@@ -3,6 +3,55 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.30.0 (2026-11-26)
+
+### Changed
+
+- **Pause music is on by default, for manual locks only.**
+  `[pause_music] enabled` now defaults to `true`, and `on` still defaults
+  to `["manual"]`: locking by hand plays NIRUX's own music, while a lock by
+  idle, suspend, the lid or a script stays silent (a laptop that locks
+  itself during a meeting plays nothing). Add reasons with, for example,
+  `on = ["manual", "idle"]`; `enabled = false` turns the music off.
+- **The tunes play shuffled.** A random first tune, then every tune once in
+  a random order per round, never the same tune twice in a row. The new
+  `shuffle` key (default `true`) brings back the natural order with
+  `shuffle = false`. A SID tune plays its default subtune.
+- The folder scan reads directory entries only (no `stat` per file, no
+  sorting when shuffling), stops after 1.5 seconds and plays what it found,
+  and allows up to 150,000 tunes and eight levels: a whole HVSC
+  (`folder = "~/Music/SID"`, about 60,000 tunes) is listed in about 50 ms on
+  a warm cache, in the background, so it never delays the lock or makes the
+  music miss its start.
+
+### Added
+
+- **`layout = "demo"`, a C64 demo lock screen.** A big chunky NIRUX logo
+  built from NIRUSID's own 8x8 pixel font (not the Commodore character set)
+  wobbles over four moving raster bars and a parallax starfield; a sine
+  scroller along the bottom carries the date and time, the away time, the
+  hostname (only with `show_hostname = true`), the tune and a quote, between
+  copper lines. Colours come from the active NIRUX theme (accent, two
+  neighbouring hues, warning and text colour) on black. While music plays
+  the bars and the logo flash on the beat, from the CAVA spectrum. The
+  clock, prompt, away time, keyboard layout, Caps Lock and failure messages
+  stay in the theme font in a calm black middle; a failed attempt also turns
+  the bars to the warning colour. Every monitor shows the logo and the
+  scroller. 25 frames a second (down to 15 on very large screens), only the
+  animated bands are drawn, and nothing at all with the display off.
+  `ascii-cava` stays the default.
+- `docs/screenshots/demo.png`, unit tests for the shuffle, the scan budget,
+  the demo scene (inside its bands on every monitor geometry), its colours,
+  beat flash and frame rate, the pixel font and `config.example.toml`.
+
+### Fixed
+
+- `config.example.toml` had a stray `layout = "cava".` line that made the
+  file invalid TOML when copied as it was.
+- `tests/resource-check.sh` runs with a private `HOME` and XDG tree and a
+  free display, takes screenshots with ffmpeg when `xwd` is missing, and
+  checks the demo layout's CPU use.
+
 ## 0.29.0 (2026-11-21)
 
 ### Changed

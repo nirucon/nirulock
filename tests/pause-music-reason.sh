@@ -1,6 +1,6 @@
 #!/bin/sh
 # [pause_music] plays only for the lock reasons in pause_music.on (by
-# default only a manual lock), and Esc still stops it.
+# default only a manual lock; it is on by default), and Esc still stops it.
 #
 #     sh tests/pause-music-reason.sh target/release/nirulock [:DISPLAY]
 #
@@ -134,6 +134,16 @@ lock music  suspend
 lock silent "" --reason manual
 
 config '[]'
+lock silent "" --reason manual
+
+# Since 0.30.0 the music is on by default: no [pause_music] table at all
+# plays for a manual lock and stays silent for the others; enabled = false
+# turns it off.
+echo 'visual = "quotes"' > "$XDG_CONFIG_HOME/niruui/lock.toml"
+lock music  "" --reason manual
+lock silent "" --reason idle
+lock silent "" --reason suspend
+printf 'visual = "quotes"\n[pause_music]\nenabled = false\n' > "$XDG_CONFIG_HOME/niruui/lock.toml"
 lock silent "" --reason manual
 
 # Esc still stops the music for the rest of the lock and keeps it locked.

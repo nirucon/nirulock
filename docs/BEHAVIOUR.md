@@ -92,12 +92,16 @@ The quote collections themselves are described in [QUOTES.md](QUOTES.md).
 
 ## Pause music (`[pause_music]`)
 
-Off by default. When `enabled = true`, and the lock's reason (`--reason` or
-`NIRULOCK_REASON`; see the README's Usage) is in `on` (default `["manual"]`),
-a `nirulock-music` thread scans
+On by default since 0.30.0 (`enabled = true`), for manual locks only. When
+it is enabled and the lock's reason (`--reason` or `NIRULOCK_REASON`; see
+the README's Usage) is in `on` (default `["manual"]`), a `nirulock-music`
+thread scans
 `folder` (default `~/.local/share/nirux/music`, where NIRUX installs its own
-music; recursively, at most six levels and 10,000 tunes, hidden entries and
-symlinked directories skipped) for `.sid` tunes and audio files (`.ogg`,
+music; recursively, at most eight levels and 150,000 tunes, hidden entries
+and symlinked directories skipped; directory entries only, the file type
+comes with the entry and only a symbolic link costs a `stat`; the scan stops
+after 1.5 s and plays what it found, which a 60,000-tune HVSC tree on a warm
+cache needs about 50 ms for) for `.sid` tunes and audio files (`.ogg`,
 `.oga`, `.opus`, `.flac`, `.wav`, any case) and looks for their players on
 `PATH` (`sidplayfp`; the first of `pw-play`, `ffplay` and `mpv`), while the
 lock is already shown. The lock itself only
@@ -131,8 +135,14 @@ FOLDER`, `...; no music`) the lock stays silent.
 When `visual` is not `auto`, the music runs its own detector for the gate
 and drops it once the decision is made.
 
-**Playing.** The tunes play in natural order of their path (digit runs compare
-as numbers, letters without case), SID tunes and audio files mixed, looping.
+**Playing.** With `shuffle = true` (the default) the tunes play from a
+shuffled deck: a Fisher-Yates permutation of their indices (four bytes a
+tune, made when the first tune plays) from an xorshift generator seeded with
+the time and the process id, so the first tune is random; every tune plays
+once per round, and a new round never starts with the tune that ended the
+last one. With `shuffle = false` they play in natural order of their path
+(digit runs compare as numbers, letters without case). Either way SID tunes
+and audio files are mixed, looping.
 A SID tune runs as `sidplayfp -q -os -o<start song> -t<seconds> FILE`, where
 the length comes from the HVSC `Songlengths.md5` (by the MD5 of the whole
 file, or by an unambiguous file name) for the header's start song, otherwise
@@ -178,3 +188,32 @@ from the lock's event loop, which never blocks; the music thread follows with
 either value stops the music, and a gap between the boot and monotonic clocks
 catches a sleep that was not announced. Once stopped, the music stays stopped
 until the next lock.
+
+## The demo layout (`layout = "demo"`)
+
+Each monitor gets two animated bands: the logo band at the top (stars, four
+raster bars, the NIRUX logo with an outline and a drop shadow) and the
+scroller band at the bottom (stars, copper lines, the sine scroller). The
+middle stays black; on the prompt monitor it holds the clock, the entry,
+the away time and the status lines in the theme font. When the prompt lines
+need more room (a small screen, a large font), the logo band gives way.
+
+A frame is a list of solid rectangles per colour, computed without I/O
+(`demo::scene`) and sent as a few dozen `PolyFillRectangle` requests into the
+backing pixmap; black is filled only where no bar covers the band, and only
+the two bands are copied to the screen. Nothing else on the screen is
+redrawn between frames. The frame interval is 40 ms (25 frames a second)
+and grows to at most 66 ms when the bands of all monitors together exceed
+two full HD screens' worth of pixels, keeping the cadence (a late frame does
+not shift the following ones). With the display off (DPMS) the scene is not
+drawn and the loop sleeps until the next clock minute or a DPMS change.
+
+The scroller's text is built when the previous text has scrolled out: the
+date and time, the away time, the hostname with `show_hostname = true`, the
+tune's info line and the next quote. It is shown in NIRUSID's 8x8 font,
+upper case, with accents and Swedish letters reduced to their plain letters
+and characters the font lacks left out. With `visual = "auto"` the panel's
+audio detector starts CAVA while music plays; the demo reads the spectrum in
+its own frames and flashes when the bass jumps above its running average,
+fading in about a third of a second.
+

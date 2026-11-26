@@ -37,8 +37,16 @@ while :; do
 done
 HELPER
 chmod +x "$TEST/bin/cava"
-export PATH="$TEST/bin:$PATH" DISPLAY=:96 XDG_CONFIG_HOME="$TEST/config" XDG_STATE_HOME="$TEST/state"
-Xvfb :96 -screen 0 1024x768x24 -nolisten tcp -noreset > "$TEST/xvfb.log" 2>&1 & XVFB=$!
+# A free display (never one this script did not start) and a private HOME
+# and XDG tree: nothing of the user's is read, and no pause music is found.
+n=96
+while [ -e "/tmp/.X11-unix/X$n" ] || [ -e "/tmp/.X$n-lock" ]; do n=$((n + 1)); done
+export PATH="$TEST/bin:$PATH" DISPLAY=":$n" HOME="$TEST/home"
+export XDG_CONFIG_HOME="$TEST/config" XDG_STATE_HOME="$TEST/state" XDG_DATA_HOME="$TEST/data"
+export XDG_CACHE_HOME="$TEST/cache" XDG_RUNTIME_DIR="$TEST/run"
+mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+mkdir -m 700 "$XDG_RUNTIME_DIR"
+Xvfb "$DISPLAY" -screen 0 1024x768x24 -nolisten tcp -noreset > "$TEST/xvfb.log" 2>&1 & XVFB=$!
 sleep 1
 tck=$(getconf CLK_TCK)
 ticks() { awk '{print $14 + $15}' "/proc/$1/stat"; }
@@ -56,8 +64,17 @@ header = int.from_bytes(d[0:4], "big")
 colours = int.from_bytes(d[76:80], "big")
 print(hashlib.md5(d[header + 12 * colours:]).hexdigest())'
 }
+# Without xwd, ffmpeg's x11grab takes the shot (raw pixels, no header).
+shot() {
+  if command -v xwd > /dev/null; then
+    xwd -root -silent | pixels
+  else
+    ffmpeg -loglevel error -f x11grab -video_size 1024x768 -i "$DISPLAY" \
+      -frames:v 1 -f rawvideo - | md5sum | cut -d ' ' -f1
+  fi
+}
 frames() {
-  for _ in 1 2 3 4 5; do xwd -root -silent | pixels; sleep 0.2; done | sort -u | wc -l
+  for _ in 1 2 3 4 5; do shot; sleep 0.2; done | sort -u | wc -l
 }
 # The spectrum alone, as before 0.19: CAVA runs whenever the display is on.
 mkdir -p "$TEST/config/niruui"
@@ -135,3 +152,36 @@ printf 'ascii:   nirulock %s%% CPU, %s distinct frames of 5 (the cursor blinks),
 [ "$ascii_frames" -le 2 ] || fail "ascii-cava repainted more than the cursor"
 awk -v c="$ascii_cpu" 'BEGIN { exit !(c <= 0.5) }' || fail "ascii-cava CPU above 0.5%"
 printf 'PASS: ascii-cava stays still but for the cursor, without CAVA\n'
+
+# The demo layout without a sound server: it animates (raster bars, logo,
+# scroller) at about 25 frames a second, frugally, and with the display off
+# it stops drawing altogether.
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+printf 'layout = "demo"\n' > "$TEST/config/niruui/lock.toml"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-demo.log" 2>&1 & LOCK=$!
+sleep 3
+kill -0 "$LOCK" || { cat "$TEST/lock-demo.log"; exit 1; }
+pgrep -f "$TEST/bin/cava" > /dev/null && fail "CAVA started in demo without music"
+demo_cpu=$(cpu "$LOCK" 6)
+demo_frames=$(frames)
+printf 'demo:    nirulock %s%% CPU, %s distinct frames of 5\n' "$demo_cpu" "$demo_frames"
+[ "$demo_frames" -ge 4 ] || fail "the demo did not animate"
+awk -v c="$demo_cpu" 'BEGIN { exit !(c <= 5.0) }' || fail "demo CPU above 5%"
+# Only where the server has DPMS (Xvfb usually has not).
+if xset q 2>/dev/null | grep -q 'DPMS is' && xset dpms force off 2>/dev/null; then
+  sleep 3
+  off_cpu=$(cpu "$LOCK" 5)
+  off_frames=$(frames)
+  printf 'demo off: nirulock %s%% CPU, %s distinct frames of 5 with the display off\n' "$off_cpu" "$off_frames"
+  [ "$off_frames" -eq 1 ] || fail "the demo drew with the display off"
+  awk -v c="$off_cpu" 'BEGIN { exit !(c <= 0.3) }' || fail "demo CPU above 0.3% with the display off"
+  xset dpms force on 2>/dev/null || :
+  sleep 1.5
+  on_frames=$(frames)
+  [ "$on_frames" -ge 4 ] || fail "the demo did not resume with the display on"
+  printf 'PASS: the demo rests with the display off and resumes\n'
+else
+  printf 'demo off: skipped, this X server has no DPMS\n'
+fi
+kill -0 "$LOCK" || fail "the lock exited"
+printf 'PASS: the demo animates frugally\n'

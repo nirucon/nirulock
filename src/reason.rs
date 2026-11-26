@@ -7,7 +7,7 @@
 //! lock before suspend says `suspend` and `niructl lock --silent` says
 //! `script`. A caller that says nothing, or names a reason this release does
 //! not know, gets [`Reason::Unspecified`]: the lock is exactly the same, only
-//! the pause music stays off by default. The reason never changes how the
+//! the pause music stays off for it by default. The reason never changes how the
 //! lock is dismissed.
 
 use std::fmt;

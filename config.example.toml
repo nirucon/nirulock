@@ -2,17 +2,21 @@
 # font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 font_size = 22.0
 
-# ascii-cava | ascii | cava | minimal | terminal | runic | corner
+# ascii-cava | ascii | demo | cava | minimal | terminal | runic | corner
 # ascii-cava (the default, "NIRUX ascii"): the NIRUX banner typed out slowly
 # on every screen like an old terminal, "A MINIMAL X11 DESKTOP" and a blinking
 # cursor under it, in the theme's accent colour; the CAVA spectrum, as wide as
 # the banner, while music plays; then the clock and the password prompt.
 # ascii: the same without the spectrum.
+# demo: a C64 demo on every screen: a chunky pixel NIRUX logo wobbling over
+# raster bars and stars, and a sine scroller with the time, the tune and a
+# quote along the bottom; the bars and logo flash on the beat while music
+# plays. The clock and the prompt stay in the calm black middle.
 # cava: a large clock above the spectrum or a quote.
-layout = "cava".
 layout = "ascii-cava"
 visualizer = true
-# What the cava and ascii-cava layouts show where the spectrum is drawn:
+# What the cava and ascii-cava layouts show where the spectrum is drawn
+# (demo: "auto" means quotes in the scroller and the beat flash):
 #   "auto"   the CAVA spectrum only while music or radio plays, otherwise a
 #            quote from ~/.config/niru/quotes/ in cava, nothing in ascii-cava
 #            (the default)
@@ -42,19 +46,25 @@ show_hostname = false
 # no rune font is available; it never draws missing-glyph boxes.
 # rune_font_path = "/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf"
 
-# Pause music while the screen is locked. Off by default. Starts only when no other audio plays in the first
-# seconds after locking; Esc, unlock, suspend and (by default) the display
-# going off stop it for the rest of the lock. Only plays for the lock reasons
-# in `on` (see `nirulock --help`): by default only when you lock by hand.
+# Pause music while the screen is locked. On by default, but only for the
+# lock reasons in `on` (see `nirulock --help`): by default only when you lock
+# by hand, never on idle, suspend or a script's lock. Starts only when no
+# other audio plays in the first seconds after locking; Esc, unlock, suspend
+# and (by default) the display going off stop it for the rest of the lock.
 [pause_music]
-enabled = false
-# Searched recursively and played in natural order (1-, 2-, 10-), looping.
-# The default is NIRUX's own music (eleven chiptunes in Ogg Vorbis). The folder
+enabled = true
+# Searched recursively (directory entries only, at most 1.5 s, in the
+# background). The default is NIRUX's own music (eleven chiptunes in Ogg
+# Vorbis). The folder
 # may hold .sid tunes (played by sidplayfp) and .ogg, .oga, .opus, .flac or
 # .wav files (played by pw-play, ffplay or mpv, whichever is installed first),
 # mixed; a tune without its player is skipped. For your own SID collection:
-# folder = "~/Music/SID"
+# folder = "~/Music/SID"          (a whole HVSC is fine)
 folder = "~/.local/share/nirux/music"
+# true (the default): a random first tune, then every tune once in a random
+# order, never the same one twice in a row; a SID tune plays its default
+# subtune. false: natural order (1-, 2-, 10-). Either way it loops.
+shuffle = true
 # Seconds per SID tune, unless the HVSC Songlengths.md5 in the folder (or its
 # DOCUMENTS directory) knows the length. Audio files play to their end.
 track_seconds = 180
@@ -62,7 +72,8 @@ stop_on_display_off = true
 # Lock reasons that may play: manual (a key, the launcher, `niructl lock` in a
 # terminal), idle (NIRUIDLE), suspend (lock before suspend), script
 # (`niructl lock --silent`, SSH), session, and unspecified (an older caller
-# that gives no reason). Leave it out for the default, ["manual"].
+# that gives no reason). Leave it out for the default, ["manual"]. To play
+# for automatic locks too: on = ["manual", "idle", "suspend"]
 on = ["manual"]
 
 [palette]

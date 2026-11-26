@@ -28,18 +28,19 @@ unlocked screen.
   (`[SE] password:`) when more than one layout is configured.
 - Real XKB input via libxkbcommon (dead keys, AltGr, keypad, compose), loaded
   at run time with a built-in fallback.
-- Seven layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `cava`, `minimal`, `terminal`, `runic` and `corner`.
+- Eight layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `cava`, `minimal`, `terminal`, `runic` and `corner`.
 - `visual = "auto"`: CAVA spectrum only while music plays, otherwise rotating
   quotes; CAVA and audio monitoring stop completely with the display off.
 - Password-length hiding with `prompt_echo = "pulse"`.
 - Every copy of the password is wiped after use; nothing about keys is logged.
 - Optional NIRUX sounds through NIRUNOTIFY (`auth-fail`, `lock`, `unlock`,
   and a quiet typewriter click for each password key, `lock-typing`).
-- Optional pause music (`[pause_music]`, off by default): NIRUX's own
-  SID-style chiptunes from `~/.local/share/nirux/music` (or your own `.sid`
-  collection, or any `.ogg`, `.opus`, `.flac` or `.wav` files) while the screen
-  is locked and nothing else is playing, by default only when you lock by
-  hand (not on idle, suspend or a script's lock). Esc stops it.
+- Pause music (`[pause_music]`, on by default, but only when you lock by
+  hand: never on idle, suspend or a script's lock): NIRUX's own SID-style
+  chiptunes from `~/.local/share/nirux/music` (or your own `.sid` collection,
+  even a whole HVSC, or any `.ogg`, `.opus`, `.flac` or `.wav` files) in a
+  shuffled order while the screen is locked and nothing else is playing. Esc
+  stops it.
 
 ## Requirements
 
@@ -130,6 +131,7 @@ Choose one with `layout`:
 |---|---|
 | `ascii-cava` | Default. "NIRUX ascii": the NIRUX banner typed out slowly on every monitor with "A MINIMAL X11 DESKTOP" and a blinking block cursor under it; on the prompt monitor the CAVA spectrum (as wide as the banner) while music plays, then the clock, prompt and away time |
 | `ascii` | The same without the spectrum |
+| `demo` | A Commodore 64 demo on every monitor: a big chunky NIRUX logo wobbling over moving raster bars and a starfield, and a sine scroller along the bottom with the time, the away time, the tune and a quote; the clock, prompt and away time in the calm black middle of the prompt monitor |
 | `cava` | Large clock above the spectrum or a quote; lock state, away time and prompt below |
 | `minimal` | Centred clock, lock state, away time and prompt |
 | `terminal` | Left-aligned monospace screen with a `~$ lock` line |
@@ -148,10 +150,45 @@ pixel row. The password prompt works from the first moment. Only what changes
 is drawn: one character while typing, the cursor's cell when it blinks. With
 the display off the cursor stops.
 
+### The demo layout
+
+![The demo layout](docs/screenshots/demo.png)
+
+`layout = "demo"` turns the lock screen into a small C64 demo. The NIRUX logo
+is built from NIRUSID's own 8x8 pixel font (drawn for NIRUSID, not the
+Commodore character set), one block per font pixel, and wobbles row by row
+while four raster bars swing up and down behind it. A sine scroller along the
+bottom carries the date and time, how long the screen has been locked, the
+hostname (only with `show_hostname = true`), the tune that plays and a quote
+from the `quotes` collections; Swedish letters are shown as their plain
+letters (Å and Ä as A, Ö as O). While music plays, the bars and the logo
+flash on the beat (the CAVA spectrum is used for that and never drawn).
+
+The colours come from the active NIRUX theme: its accent, two neighbours of
+the accent on the colour wheel, the warning colour and the text colour, each
+shaded from black to a light shine like a C64 raster bar. A grey theme such
+as Niru Noir gives a chrome and gold demo; the background stays black.
+
+The clock, the password prompt, the away time, the keyboard layout, Caps Lock
+and every failure message sit in the black middle of the prompt monitor in
+the theme font, where nothing animated passes behind them. A failed attempt
+also turns the raster bars to the warning colour while its message shows.
+Every monitor shows the logo and the scroller.
+
+It animates at 25 frames a second and draws only the two animated bands. In a
+software X server (Xvfb, the worst case) at 1920x1080 the lock used about 1 %
+of one core and the X server about 4 %; with a GPU-accelerated X server the
+server's part is much smaller. Very large screens (4K) drop to as low as 15
+frames a second to stay frugal. With the display off (DPMS) nothing is drawn
+at all. The other layouts stay as they were; `ascii-cava` is still the
+default.
+
 ### Music or quotes
 
 `visual` decides what the `cava` and `ascii-cava` layouts show where the
-spectrum is drawn:
+spectrum is drawn (in `demo`, `auto` means quotes in the scroller and the
+beat flash while music plays; `quotes` keeps the quotes and no flash,
+`music` or `cava` the flash without quotes, `none` neither):
 
 | Value | Shows |
 |---|---|
@@ -169,10 +206,14 @@ work is described in [docs/BEHAVIOUR.md](docs/BEHAVIOUR.md).
 
 ### Pause music
 
-With `[pause_music] enabled = true`, the lock plays music while it is shown, but only for the lock reasons in `on` (default
-`["manual"]`: only when you lock by hand; see [Usage](#usage)). An automatic
-lock (idle, before suspend, a script or SSH) stays quiet, so a rollout that
-locks several machines at once does not start music on all of them. It waits 2 seconds after locking (up to 5 while an idle
+The lock plays music while it is shown. This is on by default since 0.30.0,
+but only for the lock reasons in `on` (default `["manual"]`: only when you
+lock by hand; see [Usage](#usage)). An automatic lock (idle, before suspend,
+a script or SSH) stays quiet, so a laptop that locks itself during a meeting
+plays nothing, and a rollout that locks several machines at once does not
+start music on all of them. To play for automatic locks too, list their
+reasons, for example `on = ["manual", "idle"]`; `enabled = false` turns the
+music off. It waits 2 seconds after locking (up to 5 while an idle
 stream is present) and starts only if no other audio played in that time and
 the folder holds a tune it can play.
 
@@ -181,8 +222,15 @@ its own music: eleven original SID-style chiptunes (`nirux-1-ginnungagap.ogg`
 to `nirux-11-...ogg`). It may hold Commodore 64 `.sid` tunes, played by
 `sidplayfp`, and audio files (`.ogg`, `.oga`, `.opus`, `.flac`, `.wav`), played
 by the first of `pw-play`, `ffplay` and `mpv` that is installed, in any mix. To
-play your own SID collection instead, set `folder = "~/Music/SID"`. The tunes
-play in natural order (`1-`, `2-`, `10-`), looping. An audio file plays to its
+play your own SID collection instead, set `folder = "~/Music/SID"`; a whole
+HVSC (about 60 000 tunes) is fine. The tunes play shuffled by default
+(`shuffle = true`): a random first tune, then every tune once in a random
+order before any plays again, never the same tune twice in a row, looping.
+`shuffle = false` plays them in natural order (`1-`, `2-`, `10-`) instead.
+The folder is listed, never read, while it is scanned (a tune is read just
+before it plays), in the background and for 1.5 seconds at most, so even a
+large collection on a slow disk never delays the lock. A SID tune plays its
+default subtune. An audio file plays to its
 end (30 minutes at most). A SID tune plays for its length from the HVSC
 `Songlengths.md5` when that file is in the folder (or its `DOCUMENTS`
 directory), otherwise for `track_seconds`. A tune whose player is missing is
@@ -208,7 +256,7 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
 [config.example.toml](config.example.toml).
 
 ```toml
-layout = "ascii-cava"      # ascii-cava, ascii, cava, minimal, terminal, runic, corner
+layout = "ascii-cava"      # ascii-cava, ascii, demo, cava, minimal, terminal, runic, corner
 visualizer = true
 visual = "auto"            # auto, music, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns
@@ -218,9 +266,10 @@ font_size = 22.0
 # font_path = "/path/to/font.ttf"
 # rune_font_path = "/path/to/runic.ttf"
 
-[pause_music]              # off by default
-enabled = false
+[pause_music]              # on by default, for manual locks only
+enabled = true
 folder = "~/.local/share/nirux/music"  # NIRUX's music; or "~/Music/SID". .sid, .ogg, .opus, .flac, .wav
+shuffle = true             # false: natural order
 track_seconds = 180        # per SID tune without Songlengths.md5 (5 to 3600)
 stop_on_display_off = true
 on = ["manual"]            # lock reasons that play: manual, idle, suspend, script, session, unspecified
