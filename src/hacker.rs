@@ -924,7 +924,7 @@ fn signal(g: &mut Grid, f: &Facts) {
 }
 
 fn pixfont_plain(text: &str) -> String {
-    String::from_utf8_lossy(&codes(text)).into_owned()
+    crate::bbs::text_of(&codes(text))
 }
 
 fn auth(g: &mut Grid, f: &Facts, cursor: bool) {

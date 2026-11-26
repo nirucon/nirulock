@@ -5,6 +5,9 @@ git history.
 
 ## 0.34.0 (unreleased)
 
+- The bbs and hacker screens show Å, Ä, Ö, É and Ü (Swedish quotes kept
+  their letters only as A and O before; in a wrapped quote they were dropped).
+
 ### Added
 
 - **`layout = "hacker"`, the NIRUX intrusion console: a hacker's terminal

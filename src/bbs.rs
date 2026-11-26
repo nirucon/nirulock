@@ -234,6 +234,40 @@ impl Grid {
     }
 }
 
+/// The characters beyond ASCII the screen has, with their CP437 codes.
+/// Lower-case letters map to the capital's code.
+const SPECIAL: [(char, u8); 17] = [
+    ('♪', 0x0d),
+    ('♫', 0x0e),
+    ('·', 0xfa),
+    ('Å', 0x8f),
+    ('Ä', 0x8e),
+    ('Ö', 0x99),
+    ('É', 0x90),
+    ('Ü', 0x9a),
+    ('■', 0xfe),
+    ('░', 0xb0),
+    ('▒', 0xb1),
+    ('▓', 0xb2),
+    ('█', 0xdb),
+    ('│', 0xb3),
+    ('┤', 0xb4),
+    ('├', 0xc3),
+    ('─', 0xc4),
+];
+
+/// Text back from CP437 codes, so that `codes(&text_of(&codes(t)))` is
+/// `codes(t)`: wrapped and cut text keeps its special characters.
+pub fn text_of(codes: &[u8]) -> String {
+    codes
+        .iter()
+        .map(|&b| match SPECIAL.iter().find(|(_, code)| *code == b) {
+            Some((ch, _)) => *ch,
+            None => char::from(b),
+        })
+        .collect()
+}
+
 /// CP437 codes for `text`, in capitals.
 pub fn codes(text: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len());
@@ -243,21 +277,10 @@ pub fn codes(text: &str) -> Vec<u8> {
             out.push(c.to_ascii_uppercase() as u8);
             continue;
         }
-        let code = match c {
-            '♪' => Some(0x0d),
-            '♫' => Some(0x0e),
-            '·' => Some(0xfa),
-            '■' => Some(0xfe),
-            '░' => Some(0xb0),
-            '▒' => Some(0xb1),
-            '▓' => Some(0xb2),
-            '█' => Some(0xdb),
-            '│' => Some(0xb3),
-            '┤' => Some(0xb4),
-            '├' => Some(0xc3),
-            '─' => Some(0xc4),
-            _ => None,
-        };
+        let code = SPECIAL
+            .iter()
+            .find(|(ch, _)| *ch == c || ch.to_lowercase().eq(std::iter::once(c)))
+            .map(|(_, code)| *code);
         match code {
             Some(code) => out.push(code),
             None => out.extend(
@@ -443,6 +466,25 @@ fn make_glyph(code: u8) -> Glyph {
             for (y, row) in g.iter_mut().enumerate() {
                 *row = if y % 2 == 0 { 0x77 } else { 0xdd };
             }
+        }
+        // Accented capitals: the plain letter squeezed into the lower 13 rows
+        // and the mark above it, so the text keeps its height.
+        0x8f | 0x8e | 0x99 | 0x90 | 0x9a => {
+            let (base, mark): (char, [u8; 3]) = match code {
+                0x8f => ('A', [0x18, 0x24, 0x18]),
+                0x8e => ('A', [0x00, 0x66, 0x00]),
+                0x99 => ('O', [0x00, 0x66, 0x00]),
+                0x90 => ('E', [0x0c, 0x18, 0x00]),
+                _ => ('U', [0x00, 0x66, 0x00]),
+            };
+            let small = pixfont::glyph(base);
+            // The 8x8 letters use rows 0 to 6; spread those over rows 3 to 15.
+            for (y, row) in g.iter_mut().enumerate().skip(3) {
+                *row = small[(y - 3) * 7 / 13];
+            }
+            g[0] = mark[0];
+            g[1] = mark[1];
+            g[2] = mark[2];
         }
         0xdb => rows(&mut g, 0, 16, 0xff),
         0xdc => rows(&mut g, 8, 16, 0xff),
@@ -709,7 +751,7 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
-        let word: String = String::from_utf8_lossy(&codes(word)).into_owned();
+        let word: String = text_of(&codes(word));
         let mut word = word.as_str();
         loop {
             let len = line.chars().count();
@@ -945,7 +987,7 @@ pub fn byline(who: &str, max: usize) -> String {
     if fits(short) {
         return short.to_string();
     }
-    let cut: String = String::from_utf8_lossy(&codes(short)[..max.saturating_sub(3)]).into_owned();
+    let cut: String = text_of(&codes(short)[..max.saturating_sub(3)]);
     format!("{}...", cut.trim_end())
 }
 
@@ -1413,7 +1455,18 @@ mod tests {
         let a = pixfont::glyph('A');
         assert_eq!(glyphs()[usize::from(b'A')][2], a[1]);
         assert_eq!(glyphs()[usize::from(b'A')][3], a[1]);
-        assert_eq!(codes("é·♫x"), vec![b'E', 0xfa, 0x0e, b'X']);
+        assert_eq!(codes("é·♫x"), vec![0x90, 0xfa, 0x0e, b'X']);
+        assert_eq!(wrap("gör bäst", 40), vec!["GÖR BÄST"]);
+        assert_eq!(codes(&text_of(&codes("Åsa ♫ ─"))), codes("Åsa ♫ ─"));
+        assert_eq!(
+            codes("Gör bäst"),
+            vec![b'G', 0x99, b'R', b' ', b'B', 0x8e, b'S', b'T']
+        );
+        // Every accented capital has a mark above the letter.
+        for code in [0x8f, 0x8e, 0x99, 0x90, 0x9a] {
+            let g = glyphs()[code];
+            assert!(g[..3].iter().any(|r| *r != 0) && g[3..].iter().any(|r| *r != 0));
+        }
     }
 
     #[test]
@@ -1595,7 +1648,7 @@ mod tests {
             ("satie", 0xb08d7d, 0xdedad4, 0x8f8b86),
         ];
         let motd = Motd::quote(
-            "Cattle die, kinsmen die, you yourself will also die; but the fair fame never dies of the one who earns it",
+            "Ovis man, som bland andra kommer, gör bäst i att tyst förbliva; ingen vet, att han intet kan",
             "Havamal 77",
         )
         .unwrap_or_else(|| Motd::cut("Cattle die, kinsmen die, you yourself will also die; but the fair fame never dies of the one who earns it", "Havamal 77"));
