@@ -3,7 +3,7 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
-## 0.34.0 (unreleased)
+## 0.34.0 (2026-11-27)
 
 - The bbs and hacker screens show Å, Ä, Ö, É and Ü (Swedish quotes kept
   their letters only as A and O before; in a wrapped quote they were dropped).
