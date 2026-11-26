@@ -1,17 +1,29 @@
 //! `[pause_music]`: music while the screen is locked.
 //!
-//! Off by default. When enabled, and only for the lock reasons in `on`
-//! (default: `manual`, see [`crate::reason`]), the lock waits [`GATE_WINDOW`] after it is
+//! On by default, but only for the lock reasons in `on` (default: `manual`,
+//! see [`crate::reason`]): a lock started by idle, suspend or the lid stays
+//! silent, so a machine that locks itself in a meeting plays nothing. For
+//! those reasons the lock waits [`GATE_WINDOW`] after it is
 //! shown and starts the music only if the folder has tunes with a player and
 //! no other audio played during that window ([`StartGate`]).
 //!
 //! The folder (default [`DEFAULT_FOLDER`], where NIRUX installs its own
 //! chiptunes) may hold C64 SID tunes (`.sid`, played by `sidplayfp`) and
 //! audio files (`.ogg`, `.oga`, `.opus`, `.flac`, `.wav`, played by the
-//! first of `pw-play`, `ffplay` and `mpv`; see [`AudioPlayer`]), mixed. The
-//! tunes play in natural order and loop: a SID tune for its HVSC
-//! `Songlengths.md5` length or `track_seconds`, an audio file to its end
-//! ([`AUDIO_LIMIT`] at most). A tune without a player is skipped.
+//! first of `pw-play`, `ffplay` and `mpv`; see [`AudioPlayer`]), mixed. By
+//! default (`shuffle = true`) they play in a shuffled order that starts with
+//! a random tune and never plays the same tune twice in a row; with
+//! `shuffle = false` in natural order. Either way they loop: a SID tune (its
+//! default subtune) for its HVSC `Songlengths.md5` length or
+//! `track_seconds`, an audio file to its end ([`AUDIO_LIMIT`] at most). A
+//! tune without a player is skipped.
+//!
+//! The scan reads directory entries only, never a tune's contents (a tune is
+//! read just before it plays), and stops after [`SCAN_BUDGET`] or
+//! [`MAX_TUNES`]: a whole HVSC tree (about 60 000 files) is listed in a
+//! fraction of a second on a warm cache, and a cold disk cannot make the
+//! music miss its start window. It runs on the music thread, so it never
+//! delays the lock.
 //!
 //! Isolation from the lock:
 //!
@@ -65,6 +77,8 @@ pub struct Settings {
     pub stop_on_display_off: bool,
     /// The lock reasons that may play; by default only a manual lock.
     pub on: Vec<Reason>,
+    /// A shuffled order (the default) or natural order.
+    pub shuffle: bool,
 }
 
 /// NIRUX installs its own music here; `folder = "~/Music/SID"` (or any
@@ -75,11 +89,12 @@ pub const DEFAULT_TRACK_SECONDS: u32 = 180;
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             folder: DEFAULT_FOLDER.to_string(),
             track_seconds: DEFAULT_TRACK_SECONDS,
             stop_on_display_off: true,
             on: vec![Reason::Manual],
+            shuffle: true,
         }
     }
 }
@@ -118,6 +133,11 @@ impl Settings {
                         .ok_or("pause_music.stop_on_display_off must be true or false")?
                 }
                 "on" => s.on = reasons(value)?,
+                "shuffle" => {
+                    s.shuffle = value
+                        .as_bool()
+                        .ok_or("pause_music.shuffle must be true or false")?
+                }
                 other => eprintln!("nirulock: pause_music: unknown setting {other:?} ignored"),
             }
         }
@@ -142,9 +162,14 @@ impl Settings {
                 format!("{} locks", names.join(", "))
             };
             format!(
-                "on for {} (folder {}, {} s per SID tune without Songlengths.md5, {})",
+                "on for {} (folder {}, {}, {} s per SID tune without Songlengths.md5, {})",
                 on,
                 self.folder,
+                if self.shuffle {
+                    "shuffled"
+                } else {
+                    "natural order"
+                },
                 self.track_seconds,
                 if self.stop_on_display_off {
                     "stops when the display goes off"
@@ -323,11 +348,19 @@ impl Music {
         let (send, receive) = mpsc::channel();
         let folder = settings.folder_path();
         let track_seconds = settings.track_seconds;
+        let shuffle = settings.shuffle;
         let thread_shared = Arc::clone(&shared);
         thread::Builder::new()
             .name("nirulock-music".into())
             .spawn(move || {
-                player(&thread_shared, &folder, track_seconds, &receive, notify);
+                player(
+                    &thread_shared,
+                    &folder,
+                    track_seconds,
+                    shuffle,
+                    &receive,
+                    notify,
+                );
             })
             .ok()?;
         let slept = Arc::new(AtomicBool::new(false));
@@ -498,9 +531,13 @@ fn which(name: &str) -> Option<PathBuf> {
         })
 }
 
-/// At most this many tunes and directory levels are looked at.
-const MAX_TUNES: usize = 10_000;
-const MAX_DEPTH: usize = 6;
+/// At most this many tunes and directory levels are looked at: room for
+/// the whole HVSC (about 60 000 tunes) and then some.
+pub const MAX_TUNES: usize = 150_000;
+const MAX_DEPTH: usize = 8;
+/// The scan stops after this long and plays what it found: the start gate
+/// decides after [`GATE_WINDOW`], and a slow disk must not make it skip.
+pub const SCAN_BUDGET: Duration = Duration::from_millis(1500);
 
 /// How a tune is played.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -639,14 +676,34 @@ impl Players {
 
 /// The tunes under `folder`, relative to it, in natural order: `.sid` files
 /// and audio files ([`AUDIO_EXTENSIONS`]), mixed.
+#[cfg(test)]
 pub fn scan(folder: &Path) -> Vec<PathBuf> {
-    fn walk(base: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    let mut tunes = scan_until(folder, None).0;
+    sid::natural_sort(&mut tunes);
+    tunes
+}
+
+/// The tunes under `folder` in directory order, without sorting, and
+/// whether the scan saw everything (false when it stopped at `deadline` or
+/// [`MAX_TUNES`]). Only directory entries are read: the file type comes
+/// with the entry, and only a symbolic link costs a `stat`.
+pub fn scan_until(folder: &Path, deadline: Option<Instant>) -> (Vec<PathBuf>, bool) {
+    fn walk(
+        base: &Path,
+        dir: &Path,
+        depth: usize,
+        deadline: Option<Instant>,
+        out: &mut Vec<PathBuf>,
+    ) -> bool {
         let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
+            return true;
         };
-        for entry in entries.flatten() {
+        for (n, entry) in entries.flatten().enumerate() {
             if out.len() >= MAX_TUNES {
-                return;
+                return false;
+            }
+            if n % 64 == 0 && deadline.is_some_and(|d| Instant::now() >= d) {
+                return false;
             }
             let name = entry.file_name();
             if name.to_string_lossy().starts_with('.') {
@@ -658,20 +715,98 @@ pub fn scan(folder: &Path) -> Vec<PathBuf> {
                 continue;
             };
             if file_type.is_dir() {
-                if depth < MAX_DEPTH {
-                    walk(base, &path, depth + 1, out);
+                if depth < MAX_DEPTH && !walk(base, &path, depth + 1, deadline, out) {
+                    return false;
                 }
-            } else if kind(&path).is_some() && std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {
+            } else if kind(&path).is_some()
+                && (file_type.is_file()
+                    || (file_type.is_symlink()
+                        && std::fs::metadata(&path).is_ok_and(|m| m.is_file())))
+            {
                 if let Ok(relative) = path.strip_prefix(base) {
                     out.push(relative.to_path_buf());
                 }
             }
         }
+        true
     }
     let mut tunes = Vec::new();
-    walk(folder, folder, 0, &mut tunes);
-    sid::natural_sort(&mut tunes);
-    tunes
+    let complete = walk(folder, folder, 0, deadline, &mut tunes);
+    (tunes, complete)
+}
+
+/// The order the tunes play in: natural order, or shuffled ("a deck"): a
+/// random first tune, every tune once per round, and a new round never
+/// starts with the tune that ended the last one. Only indices are kept, so
+/// a large collection costs four bytes per tune.
+pub struct Order {
+    len: usize,
+    shuffle: bool,
+    rng: u64,
+    deck: Vec<u32>,
+    pos: usize,
+    last: Option<usize>,
+}
+
+impl Order {
+    pub fn new(len: usize, shuffle: bool, seed: u64) -> Self {
+        Self {
+            len,
+            shuffle,
+            // xorshift must not start at zero.
+            rng: seed | 1,
+            deck: Vec::new(),
+            pos: 0,
+            last: None,
+        }
+    }
+
+    /// xorshift64*: plenty for picking tunes, and no crate.
+    fn random(&mut self) -> u64 {
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.random() % n as u64) as usize
+    }
+
+    /// The index of the next tune; `None` without tunes.
+    pub fn next(&mut self) -> Option<usize> {
+        if self.len == 0 {
+            return None;
+        }
+        let index = if !self.shuffle {
+            self.last.map_or(0, |last| (last + 1) % self.len)
+        } else {
+            if self.pos >= self.deck.len() {
+                self.deck = (0..self.len as u32).collect();
+                for i in (1..self.len).rev() {
+                    let j = self.below(i + 1);
+                    self.deck.swap(i, j);
+                }
+                if self.len > 1 && self.last == Some(self.deck[0] as usize) {
+                    let j = 1 + self.below(self.len - 1);
+                    self.deck.swap(0, j);
+                }
+                self.pos = 0;
+            }
+            self.pos += 1;
+            self.deck[self.pos - 1] as usize
+        };
+        self.last = Some(index);
+        Some(index)
+    }
+}
+
+/// A seed for the shuffle: the time and the process.
+fn shuffle_seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    nanos ^ (u64::from(std::process::id()) << 32) ^ 0x9e37_79b9_7f4a_7c15
 }
 
 /// The `tunes` that `players` can play, in their order, and the lines to
@@ -780,12 +915,26 @@ fn player(
     shared: &Shared,
     folder: &Path,
     track_seconds: u32,
+    shuffle: bool,
     receive: &mpsc::Receiver<Request>,
     mut notify: UnixStream,
 ) {
     let players = Players::find();
     let tunes = if folder.is_dir() {
-        scan(folder)
+        let begun = Instant::now();
+        let (mut tunes, complete) = scan_until(folder, Some(begun + SCAN_BUDGET));
+        if !complete {
+            eprintln!(
+                "nirulock: pause_music: the scan stopped after {} tunes ({:.1} s); playing those",
+                tunes.len(),
+                begun.elapsed().as_secs_f32()
+            );
+        }
+        // The shuffled order needs no sorting; natural order does.
+        if !shuffle {
+            sid::natural_sort(&mut tunes);
+        }
+        tunes
     } else {
         Vec::new()
     };
@@ -814,10 +963,12 @@ fn player(
     let mut audio_player = 0;
     let mut audio_failures = 0;
     let mut quick_failures = 0;
-    let mut index = 0;
+    let mut order = Order::new(tunes.len(), shuffle, shuffle_seed());
     loop {
-        let file = folder.join(&tunes[index % tunes.len()]);
-        index = (index + 1) % tunes.len();
+        let Some(index) = order.next() else {
+            return;
+        };
+        let file = folder.join(&tunes[index]);
         let spawned = match kind(&file) {
             Some(Kind::Audio) => {
                 let (player, program) = &players.audio[audio_player];
@@ -1221,6 +1372,11 @@ mod tests {
 
     #[test]
     fn only_a_manual_lock_plays_by_default() {
+        // On without any setting at all, and the same when switched on.
+        assert_eq!(
+            Settings::default(),
+            settings("[pause_music]\nenabled = true").unwrap()
+        );
         let s = settings("[pause_music]\nenabled = true").unwrap();
         assert_eq!(s.on, vec![Reason::Manual]);
         assert!(s.plays_for(Reason::Manual));
@@ -1234,6 +1390,77 @@ mod tests {
             assert!(!s.plays_for(r), "{r} must not play by default");
         }
         assert!(s.describe().starts_with("on for manual locks"));
+    }
+
+    #[test]
+    fn natural_order_loops_from_the_first_tune() {
+        let mut order = Order::new(3, false, 42);
+        let got: Vec<usize> = (0..7).filter_map(|_| order.next()).collect();
+        assert_eq!(got, [0, 1, 2, 0, 1, 2, 0]);
+        assert_eq!(Order::new(0, false, 1).next(), None);
+        assert_eq!(Order::new(0, true, 1).next(), None);
+    }
+
+    #[test]
+    fn shuffle_plays_every_tune_once_per_round_without_repeats() {
+        for seed in 0..200u64 {
+            let len = 1 + (seed as usize % 12);
+            let mut order = Order::new(len, true, seed.wrapping_mul(0x9e37_79b9));
+            let mut last = None;
+            for _round in 0..4 {
+                let mut seen = vec![false; len];
+                for _ in 0..len {
+                    let i = order.next().unwrap();
+                    assert!(i < len);
+                    assert!(!seen[i], "seed {seed}: {i} twice in a round");
+                    seen[i] = true;
+                    if len > 1 {
+                        assert_ne!(Some(i), last, "seed {seed}: {i} twice in a row");
+                    }
+                    last = Some(i);
+                }
+                assert!(seen.iter().all(|s| *s));
+            }
+        }
+    }
+
+    #[test]
+    fn shuffle_starts_with_a_random_tune() {
+        // NIRUX's eleven tunes: the first one differs between locks.
+        let firsts: std::collections::HashSet<usize> = (0..64u64)
+            .map(|seed| Order::new(11, true, seed * 7919 + 3).next().unwrap())
+            .collect();
+        assert!(firsts.len() >= 6, "{firsts:?}");
+        // A large collection is cheap: indices only, built on first use.
+        let mut big = Order::new(60_000, true, shuffle_seed());
+        assert!(big.deck.is_empty());
+        let first = big.next().unwrap();
+        assert!(first < 60_000);
+        assert_eq!(big.deck.len(), 60_000);
+    }
+
+    #[test]
+    fn a_large_tree_is_listed_quickly_and_the_budget_holds() {
+        let dir = std::env::temp_dir().join(format!("lock-big-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for d in 0..40 {
+            let sub = dir.join(format!(
+                "MUSICIANS/{}/composer-{d}",
+                (b'A' + d % 26) as char
+            ));
+            std::fs::create_dir_all(&sub).unwrap();
+            for t in 0..50 {
+                std::fs::write(sub.join(format!("tune_{t}.sid")), b"").unwrap();
+            }
+            std::fs::write(sub.join("readme.txt"), b"").unwrap();
+        }
+        let (tunes, complete) = scan_until(&dir, Some(Instant::now() + SCAN_BUDGET));
+        assert!(complete);
+        assert_eq!(tunes.len(), 2000);
+        // A deadline that has passed stops the walk at once.
+        let (_, complete) = scan_until(&dir, Some(Instant::now()));
+        assert!(!complete);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1446,9 +1673,11 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_off_and_validate() {
+    fn settings_default_on_shuffled_and_validate() {
         let d = Settings::default();
-        assert!(!d.enabled);
+        assert!(d.enabled);
+        assert!(d.shuffle);
+        assert_eq!(d.on, [Reason::Manual]);
         assert_eq!(d.folder, "~/.local/share/nirux/music");
         assert_eq!(d.folder, DEFAULT_FOLDER);
         assert_eq!(
@@ -1468,6 +1697,15 @@ mod tests {
         assert!(parse("track_seconds = 1").is_err());
         assert!(parse("enabled = \"yes\"").is_err());
         assert!(parse("folder = \"\"").is_err());
+        assert!(!parse("shuffle = false").unwrap().shuffle);
+        assert!(parse("shuffle = true").unwrap().shuffle);
+        assert!(parse("shuffle = \"random\"").is_err());
+        assert!(parse("enabled = false").unwrap().describe() == "off");
+        assert!(d.describe().contains("shuffled"));
+        assert!(parse("shuffle = false")
+            .unwrap()
+            .describe()
+            .contains("natural order"));
         assert_eq!(
             expand_home("~/Music/SID", Some(PathBuf::from("/home/n"))),
             PathBuf::from("/home/n/Music/SID")

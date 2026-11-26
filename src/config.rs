@@ -616,12 +616,21 @@ mod tests {
     }
 
     #[test]
-    fn pause_music_is_off_unless_asked_for() {
-        assert!(!Config::default().pause_music.enabled);
-        assert!(Config::default().describe().ends_with("pause music: off"));
-        let v: toml::Value = "[pause_music]\nenabled = true".parse().unwrap();
+    fn pause_music_is_on_for_manual_locks_and_shuffled_by_default() {
+        let d = Config::default();
+        assert!(d.pause_music.enabled && d.pause_music.shuffle);
+        assert_eq!(d.pause_music.on, [crate::reason::Reason::Manual]);
+        assert!(d.describe().contains(
+            "pause music: on for manual locks (folder ~/.local/share/nirux/music, shuffled,"
+        ));
+        let v: toml::Value = "[pause_music]\nenabled = false".parse().unwrap();
+        assert!(Config::from_value(&v)
+            .unwrap()
+            .describe()
+            .ends_with("pause music: off"));
+        let v: toml::Value = "[pause_music]\nshuffle = false".parse().unwrap();
         let c = Config::from_value(&v).unwrap();
-        assert!(c.pause_music.enabled);
+        assert!(c.pause_music.enabled && !c.pause_music.shuffle);
         assert_eq!(c.pause_music.folder, "~/.local/share/nirux/music");
         let v: toml::Value = "[pause_music]\ntrack_seconds = 0".parse().unwrap();
         assert!(Config::from_value(&v).is_err());
