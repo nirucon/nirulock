@@ -24,6 +24,8 @@ pub enum Layout {
     Demo,
     /// An arcade cabinet in attract mode: NIRUX RAID plays itself.
     Attract,
+    /// A C64 loading screen of Erik Satie, with his Gymnopedie.
+    Satie,
 }
 
 impl Layout {
@@ -38,7 +40,7 @@ impl Layout {
     pub fn has_panel(self) -> bool {
         matches!(
             self,
-            Self::Cava | Self::AsciiCava | Self::Demo | Self::Attract
+            Self::Cava | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie
         )
     }
 
@@ -46,7 +48,7 @@ impl Layout {
     pub fn animates(self) -> bool {
         matches!(
             self,
-            Self::Ascii | Self::AsciiCava | Self::Demo | Self::Attract
+            Self::Ascii | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie
         )
     }
 
@@ -61,6 +63,7 @@ impl Layout {
             "ascii-cava" => Some(Self::AsciiCava),
             "demo" => Some(Self::Demo),
             "attract" => Some(Self::Attract),
+            "satie" => Some(Self::Satie),
             _ => None,
         }
     }
@@ -76,6 +79,7 @@ impl Layout {
             Self::AsciiCava => "ascii-cava",
             Self::Demo => "demo",
             Self::Attract => "attract",
+            Self::Satie => "satie",
         }
     }
 }
@@ -402,7 +406,7 @@ impl Config {
         }
         if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
             cfg.layout = Layout::parse(layout).ok_or_else(|| {
-                "layout must be ascii-cava, ascii, demo, attract, cava, minimal, terminal, runic or corner"
+                "layout must be ascii-cava, ascii, demo, attract, satie, cava, minimal, terminal, runic or corner"
                     .to_string()
             })?;
         }
@@ -620,6 +624,9 @@ mod tests {
         assert_eq!(Layout::Attract.as_str(), "attract");
         assert!(Layout::Attract.animates() && Layout::Attract.has_panel());
         assert!(!Layout::Attract.is_ascii());
+        assert_eq!(Layout::parse("Satie"), Some(Layout::Satie));
+        assert_eq!(Layout::Satie.as_str(), "satie");
+        assert!(Layout::Satie.animates() && Layout::Satie.has_panel());
         assert!(Layout::parse("noir-ish").is_none());
         // The default stays NIRUX ascii; demo is chosen in lock.toml.
         let c = |text: &str| Config::from_value(&text.parse().unwrap());
@@ -633,7 +640,10 @@ mod tests {
             .describe()
             .contains("\nlayout: attract\n"));
         let err = c("layout = \"amiga\"").unwrap_err().to_string();
-        assert!(err.contains("demo") && err.contains("attract"), "{err}");
+        assert!(
+            err.contains("demo") && err.contains("attract") && err.contains("satie"),
+            "{err}"
+        );
     }
 
     #[test]

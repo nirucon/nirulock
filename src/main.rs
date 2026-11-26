@@ -30,6 +30,7 @@ mod pam;
 mod pixfont;
 mod quotes;
 mod reason;
+mod satie;
 mod secret;
 mod sid;
 mod sound;
@@ -221,6 +222,7 @@ struct Lock {
     /// The `demo` layout's scene.
     demo: demo::State,
     attract: attract::State,
+    satie: satie::State,
     spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
@@ -279,7 +281,7 @@ impl Lock {
         let music = cfg
             .pause_music
             .plays_for(reason)
-            .then(|| music::Music::start(&cfg.pause_music))
+            .then(|| music::Music::start(&cfg.pause_music, satie_tune(cfg.layout)))
             .flatten();
         let music_audio = (music.is_some() && visual.as_ref().and_then(|v| v.audio()).is_none())
             .then(|| audio::Audio::start("nirulock", None));
@@ -351,6 +353,7 @@ impl Lock {
             ascii: ascii::State::default(),
             demo: demo::State::default(),
             attract: attract::State::default(),
+            satie: satie::State::default(),
             spectrum_rect: None,
             ready: false,
             caps,
@@ -1058,15 +1061,23 @@ impl Lock {
                     row += spots.step;
                 }
             }
-            config::Layout::Demo | config::Layout::Attract => {
-                let spots = if self.cfg.layout == config::Layout::Demo {
-                    let spots = self.demo_layout(area);
-                    self.demo_paint()?;
-                    spots
-                } else {
-                    let spots = self.attract_layout(area);
-                    self.attract_paint(true)?;
-                    spots
+            config::Layout::Demo | config::Layout::Attract | config::Layout::Satie => {
+                let spots = match self.cfg.layout {
+                    config::Layout::Demo => {
+                        let spots = self.demo_layout(area);
+                        self.demo_paint()?;
+                        spots
+                    }
+                    config::Layout::Attract => {
+                        let spots = self.attract_layout(area);
+                        self.attract_paint(true)?;
+                        spots
+                    }
+                    _ => {
+                        let spots = self.satie_layout(area);
+                        self.satie_paint(true)?;
+                        spots
+                    }
                 };
                 ascii_info = Some(spots.info);
                 self.clock_renderer.draw_centred(
@@ -1192,7 +1203,8 @@ impl Lock {
                 config::Layout::Ascii
                 | config::Layout::AsciiCava
                 | config::Layout::Demo
-                | config::Layout::Attract => (None, ascii_info.unwrap_or(mid - line * 3)),
+                | config::Layout::Attract
+                | config::Layout::Satie => (None, ascii_info.unwrap_or(mid - line * 3)),
             };
             let (x, baseline) = match at {
                 (Some(x), baseline) => (x, baseline),
@@ -1562,12 +1574,16 @@ impl Lock {
                 if let Err(e) = self.attract_tick(display_on) {
                     eprintln!("nirulock: attract: {e}");
                 }
+            } else if self.cfg.layout == config::Layout::Satie {
+                if let Err(e) = self.satie_tick(display_on) {
+                    eprintln!("nirulock: satie: {e}");
+                }
             }
             // The demo has no panel to paint: it reads the spectrum in its
             // own frames.
             let demo = matches!(
                 self.cfg.layout,
-                config::Layout::Demo | config::Layout::Attract
+                config::Layout::Demo | config::Layout::Attract | config::Layout::Satie
             );
             if !repaint && !demo && (frame_due || panel_dirty) {
                 if let Err(e) = self.draw_cava_frame() {
@@ -1773,9 +1789,20 @@ impl Lock {
         if let Some(next) = self.attract_timeout(display_on) {
             ms = ms.min(next.as_millis() as u64);
         }
+        if let Some(next) = self.satie_timeout(display_on) {
+            ms = ms.min(next.as_millis() as u64);
+        }
         // A few milliseconds late is better than waking just before a boundary.
         (ms + 5).clamp(1, 60_000) as i32
     }
+}
+
+/// The `satie` layout plays NIRUX's Gymnopedie on its own when NIRUX has
+/// installed it in its music folder.
+fn satie_tune(layout: config::Layout) -> Option<std::path::PathBuf> {
+    (layout == config::Layout::Satie)
+        .then(|| music::Settings::default().folder_path().join(satie::TUNE))
+        .filter(|path| path.is_file())
 }
 
 /// The pause music's note.

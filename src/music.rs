@@ -335,7 +335,9 @@ pub enum Tick {
 impl Music {
     /// Scan the folder and look for the players on the music thread; the
     /// caller decides when to [`Music::play`].
-    pub fn start(settings: &Settings) -> Option<Self> {
+    /// With `only`, that one file plays (again and again) when a player
+    /// can play it, instead of the folder.
+    pub fn start(settings: &Settings, only: Option<PathBuf>) -> Option<Self> {
         let (wake, notify) = UnixStream::pair().ok()?;
         wake.set_nonblocking(true).ok()?;
         notify.set_nonblocking(true).ok()?;
@@ -357,6 +359,7 @@ impl Music {
                 player(
                     &thread_shared,
                     &folder,
+                    only.as_deref(),
                     track_seconds,
                     shuffle,
                     &receive,
@@ -918,7 +921,6 @@ const MAX_QUICK_FAILURES: usize = 5;
 /// fails at once, and ffplay or mpv may still play.
 const AUDIO_PLAYER_FAILURES: usize = 2;
 
-/// One tune, ready to start.
 /// The Vorbis comments of an audio file, from its first
 /// [`sid::TAG_BYTES`] bytes.
 fn read_tags(file: &Path) -> sid::Tags {
@@ -933,6 +935,7 @@ fn read_tags(file: &Path) -> sid::Tags {
     }
 }
 
+/// One tune, ready to start.
 struct Prepared {
     line: String,
     /// "Artist - Title".
@@ -947,12 +950,39 @@ struct Prepared {
 fn player(
     shared: &Shared,
     folder: &Path,
+    only: Option<&Path>,
     track_seconds: u32,
     shuffle: bool,
     receive: &mpsc::Receiver<Request>,
     mut notify: UnixStream,
 ) {
     let players = Players::find();
+    // One tune on its own, again and again, when a layout asks for it and a
+    // player can play it; otherwise the folder as usual.
+    let alone = only.and_then(|file| {
+        let (dir, name) = (file.parent()?, file.file_name()?);
+        let (tunes, _) = playable(dir, vec![PathBuf::from(name)], &players);
+        (!tunes.is_empty()).then(|| (dir.to_path_buf(), tunes))
+    });
+    let (folder, tunes) = match alone {
+        Some((dir, tunes)) => (dir, tunes),
+        None => scanned(folder, shuffle, &players),
+    };
+    let folder = folder.as_path();
+    play_tunes(
+        shared,
+        folder,
+        tunes,
+        track_seconds,
+        shuffle,
+        receive,
+        &mut notify,
+        &players,
+    );
+}
+
+/// The playable tunes of `folder`, in their order.
+fn scanned(folder: &Path, shuffle: bool, players: &Players) -> (PathBuf, Vec<PathBuf>) {
     let tunes = if folder.is_dir() {
         let begun = Instant::now();
         let (mut tunes, complete) = scan_until(folder, Some(begun + SCAN_BUDGET));
@@ -971,10 +1001,24 @@ fn player(
     } else {
         Vec::new()
     };
-    let (tunes, notes) = playable(folder, tunes, &players);
+    let (tunes, notes) = playable(folder, tunes, players);
     for note in notes {
         eprintln!("nirulock: pause_music: {note}");
     }
+    (folder.to_path_buf(), tunes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn play_tunes(
+    shared: &Shared,
+    folder: &Path,
+    tunes: Vec<PathBuf>,
+    track_seconds: u32,
+    shuffle: bool,
+    receive: &mpsc::Receiver<Request>,
+    notify: &mut UnixStream,
+    players: &Players,
+) {
     let ready = !tunes.is_empty();
     shared.ready.store(ready, Ordering::Release);
     shared.scanned.store(true, Ordering::Release);
@@ -1692,7 +1736,7 @@ mod tests {
             folder: "/nonexistent/nirulock-test".into(),
             ..Settings::default()
         };
-        let mut music = Music::start(&settings).expect("music thread");
+        let mut music = Music::start(&settings, None).expect("music thread");
         // The thread finds no tunes and ends, closing its end of the socket.
         for _ in 0..200 {
             music.woke();

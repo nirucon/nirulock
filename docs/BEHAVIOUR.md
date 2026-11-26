@@ -250,3 +250,32 @@ jump, and with the display off nothing is drawn and the game waits. A typed
 key repaints the screen with the game as it is at that moment; it never
 changes the game. The music's beat (the same spectrum path as the demo)
 only changes how bright the explosions and the muzzle flash are drawn.
+
+## The satie layout (`layout = "satie"`)
+
+A load follows a fixed timeline (`satie::Stage`): PRESS PLAY ON TAPE (1.5
+s), SEARCHING (2 s), FOUND ERIK SATIE (1.5 s), the bitmap (13 s) and the
+colours (6 s), each 1,000 character cells of 4 by 8 wide pixels, left to
+right and top to bottom, then READY. A new load starts five minutes after
+the last one began. The canvas is 320x224: the 160x200 picture with every
+pixel doubled across, and a two-line text strip.
+
+The picture (`assets/satie.bin`, 16,000 bytes, see `docs/CREDITS.md`) holds
+six brightness levels; while the bitmap loads they are drawn in greys, and
+the colour pass maps them to black, the muted colour darkened, and the
+accent dark, as it is and light, and white. Each frame the canvas rows that
+changed since the last one are sent with PutImage, scaled by the whole
+number that fits (at most 200 KB a request): during the load that is one
+band of cells, at rest nothing (the clock in the strip changes once a
+minute). The border is drawn as rectangles around the picture: random
+stripes in five theme colours every frame while loading, then one settled
+colour that brightens a little on the beat while music plays, the warning
+colour after a failed attempt. Loading and following the beat run at the
+demo layout's frame rate; at rest the layout looks four times a second.
+With the display off nothing is drawn.
+
+With `layout = "satie"` and `~/.local/share/nirux/music/nirux-12-gymnopedie.ogg`
+present and playable, the music thread plays that one file again and again
+instead of scanning the folder; the start gate, the lock reasons, Esc and
+the display-off stop work as for any pause music. Without it the folder
+plays as usual.

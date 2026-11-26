@@ -12,7 +12,11 @@
 //!
 //! Everything here is pure (no X requests) so that it can be tested.
 
-use crate::{demo, display::Area, layout, pixfont};
+use crate::{
+    demo::{self, Spots},
+    display::Area,
+    layout, pixfont,
+};
 use x11rb::protocol::xproto::Rectangle;
 
 /// Colours in a canvas.
@@ -227,15 +231,6 @@ impl Placement {
     }
 }
 
-/// The largest whole scale at which a `w` by `h` canvas (pixels `aspect`
-/// times as wide as tall) fits `max_w` by `max_h`; 0 when it does not fit
-/// at all.
-pub fn scale_for(w: i32, h: i32, aspect: i32, max_w: i32, max_h: i32) -> i32 {
-    let by_w = max_w / (w * aspect.max(1)).max(1);
-    let by_h = max_h / h.max(1);
-    by_w.min(by_h).max(0)
-}
-
 /// Centre a canvas `w` pixels wide horizontally on `area` with its top at `top`.
 pub fn centred(area: Area, w: i32, scale: i32, aspect: i32, top: i32) -> Placement {
     let sx = scale * aspect.max(1);
@@ -246,6 +241,146 @@ pub fn centred(area: Area, w: i32, scale: i32, aspect: i32, top: i32) -> Placeme
         sx,
         sy: scale,
     }
+}
+
+/// One monitor: where the canvas goes (none when it does not fit), the
+/// frame's thickness around it, and the black area for the prompt lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Screen {
+    pub place: Option<Placement>,
+    /// The canvas size.
+    pub cw: i32,
+    pub ch: i32,
+    pub bezel: i32,
+    pub prompt_top: i32,
+    pub prompt_bottom: i32,
+}
+
+impl Screen {
+    /// The canvas on the screen, frame included.
+    pub fn outer(&self) -> Option<(i32, i32, i32, i32)> {
+        self.place.map(|p| {
+            let (x, y, w, h) = p.rect(self.cw, self.ch);
+            let b = self.bezel;
+            (x - b, y - b, w + 2 * b, h + 2 * b)
+        })
+    }
+}
+
+/// Lay out one monitor for a `cw` by `ch` canvas with a frame `border(scale)`
+/// screen pixels thick: the largest whole scale at which the canvas, its
+/// frame and (with `block` > 0, the prompt monitor) the prompt lines below
+/// it fit, the canvas and the prompt centred as one block. Without a
+/// prompt the canvas is centred. A screen too small for the canvas at scale
+/// 1 gets no canvas, only the prompt.
+pub fn arrange(area: Area, block: i32, cw: i32, ch: i32, border: impl Fn(i32) -> i32) -> Screen {
+    let y = i32::from(area.y);
+    let (w, h) = (i32::from(area.width).max(1), i32::from(area.height).max(1));
+    let margin = (h * 3 / 100).max(4);
+    let room_h = if block > 0 {
+        h - block - 3 * margin
+    } else {
+        h - 2 * margin
+    };
+    let room_w = w * 94 / 100;
+    let fits = |s: i32| cw * s + 2 * border(s) <= room_w && ch * s + 2 * border(s) <= room_h;
+    let Some(scale) = (1..=16).rev().find(|&s| fits(s)) else {
+        return Screen {
+            place: None,
+            cw,
+            ch,
+            bezel: 0,
+            prompt_top: y + margin,
+            prompt_bottom: y + h - margin,
+        };
+    };
+    let bezel = border(scale);
+    let field_h = ch * scale;
+    let top = if block > 0 {
+        let total = field_h + 2 * bezel + margin + block;
+        y + ((h - total) / 2).max(margin) + bezel
+    } else {
+        y + (h - field_h) / 2
+    };
+    Screen {
+        place: Some(centred(area, cw, scale, 1, top)),
+        cw,
+        ch,
+        bezel,
+        prompt_top: top + field_h + bezel + margin,
+        prompt_bottom: y + h - margin,
+    }
+}
+
+/// The prompt lines in the black area of `s`.
+pub fn spots(s: &Screen, u: i32, clock_ascent: i32, info_ascent: i32, music: bool) -> Spots {
+    let block = demo::prompt_block(u, clock_ascent, music);
+    let (top, bottom) = (s.prompt_top, s.prompt_bottom);
+    let start = (top + (bottom - top - block) / 4).max(top);
+    let info = start + info_ascent;
+    let clock = start + if music { u * 2 } else { 0 } + clock_ascent;
+    let entry = clock + u * 2;
+    let away = entry + u * 3 / 2;
+    Spots {
+        info: layout::clamp16(info),
+        clock: layout::clamp16(clock),
+        entry: layout::clamp16(entry),
+        away: layout::clamp16(away),
+        rows: away + u * 19 / 10,
+        step: u * 5 / 4,
+        limit: bottom - u / 2,
+    }
+}
+
+/// Rows `y0..y1` of the canvas as a 32-bit image scaled by `place`, for
+/// one PutImage: `big_endian` follows the X server's image byte order.
+/// Returns the bytes and the image size in screen pixels.
+pub fn image_rows(
+    canvas: &Canvas,
+    palette: &Palette,
+    place: &Placement,
+    y0: i32,
+    y1: i32,
+    big_endian: bool,
+) -> (Vec<u8>, u16, u16) {
+    let (y0, y1) = (y0.clamp(0, canvas.h), y1.clamp(0, canvas.h));
+    let width = (canvas.w * place.sx).max(0) as usize;
+    let mut out = Vec::with_capacity(width * ((y1 - y0) * place.sy).max(0) as usize * 4);
+    let mut line = Vec::with_capacity(width * 4);
+    for y in y0..y1 {
+        line.clear();
+        for x in 0..canvas.w {
+            let colour = palette.0[usize::from(canvas.get(x, y) & 15)];
+            let bytes = if big_endian {
+                colour.to_be_bytes()
+            } else {
+                colour.to_le_bytes()
+            };
+            for _ in 0..place.sx {
+                line.extend_from_slice(&bytes);
+            }
+        }
+        for _ in 0..place.sy {
+            out.extend_from_slice(&line);
+        }
+    }
+    let height = ((y1 - y0) * place.sy).clamp(0, i32::from(u16::MAX)) as u16;
+    (out, width.min(usize::from(u16::MAX)) as u16, height)
+}
+
+/// The rows that differ between two canvases of the same size: the first
+/// and one past the last; `None` when they are equal. Without `prev` every
+/// row.
+pub fn changed_rows(cur: &Canvas, prev: Option<&Canvas>) -> Option<(i32, i32)> {
+    let Some(prev) = prev.filter(|p| p.w == cur.w && p.h == cur.h) else {
+        return (cur.h > 0).then_some((0, cur.h));
+    };
+    let w = cur.w as usize;
+    let differs = |y: usize| cur.px[y * w..(y + 1) * w] != prev.px[y * w..(y + 1) * w];
+    let rows = cur.h.max(0) as usize;
+    let first = (0..rows).find(|&y| differs(y))?;
+    let last = (first..rows).rev().find(|&y| differs(y)).unwrap_or(first);
+    Some((first as i32, last as i32 + 1))
 }
 
 /// The 16 colours, derived from the theme: black, a light white, the
@@ -385,10 +520,40 @@ mod tests {
     }
 
     #[test]
+    fn images_scale_rows_and_find_what_changed() {
+        let mut c = Canvas::new(3, 4);
+        c.set(1, 2, 3);
+        let mut pal = Palette([0; COLOURS]);
+        pal.0[3] = 0x112233;
+        let place = Placement {
+            x: 0,
+            y: 0,
+            sx: 2,
+            sy: 3,
+        };
+        let (bytes, w, h) = image_rows(&c, &pal, &place, 2, 3, false);
+        assert_eq!((w, h), (6, 3));
+        assert_eq!(bytes.len(), 6 * 3 * 4);
+        // Pixel (1, 2) is screen columns 2 and 3 of every repeated row.
+        for row in 0..3 {
+            for col in 0..6 {
+                let at = (row * 6 + col) * 4;
+                let want = if col == 2 || col == 3 { 0x33 } else { 0 };
+                assert_eq!(bytes[at], want, "{row} {col}");
+            }
+        }
+        let (be, _, _) = image_rows(&c, &pal, &place, 2, 3, true);
+        assert_eq!(&be[8..12], &[0, 0x11, 0x22, 0x33]);
+        let prev = c.clone();
+        assert_eq!(changed_rows(&c, Some(&prev)), None);
+        assert_eq!(changed_rows(&c, None), Some((0, 4)));
+        c.set(0, 1, 5);
+        c.set(2, 3, 5);
+        assert_eq!(changed_rows(&c, Some(&prev)), Some((1, 4)));
+    }
+
+    #[test]
     fn placements_scale_whole_pixels() {
-        assert_eq!(scale_for(320, 200, 1, 1920, 700), 3);
-        assert_eq!(scale_for(160, 200, 2, 1920, 1000), 5);
-        assert_eq!(scale_for(320, 200, 1, 300, 700), 0);
         let p = centred(
             Area {
                 x: 1920,

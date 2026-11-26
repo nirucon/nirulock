@@ -28,7 +28,7 @@ unlocked screen.
   (`[SE] password:`) when more than one layout is configured.
 - Real XKB input via libxkbcommon (dead keys, AltGr, keypad, compose), loaded
   at run time with a built-in fallback.
-- Nine layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `attract` (a C64 shoot 'em up that plays itself, like an arcade game's attract mode), `cava`, `minimal`, `terminal`, `runic` and `corner`.
+- Ten layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `attract` (a C64 shoot 'em up that plays itself, like an arcade game's attract mode), `satie` (a C64 loading screen of Erik Satie, with his Gymnopedie), `cava`, `minimal`, `terminal`, `runic` and `corner`.
 - `visual = "auto"`: CAVA spectrum only while music plays, otherwise rotating
   quotes; CAVA and audio monitoring stop completely with the display off.
 - Password-length hiding with `prompt_echo = "pulse"`.
@@ -133,6 +133,7 @@ Choose one with `layout`:
 | `ascii` | The same without the spectrum |
 | `demo` | A Commodore 64 demo on every monitor: a big chunky NIRUX logo wobbling over moving raster bars and a starfield, and a sine scroller along the bottom with the time, the away time, the tune and a quote; the clock, prompt and away time in the calm black middle of the prompt monitor |
 | `attract` | An arcade cabinet in attract mode: NIRUX RAID, an original C64 style shoot 'em up, plays itself in a framed playfield (title, high scores, a game, GAME OVER, again); the clock, prompt and away time on black below it |
+| `satie` | A C64 tape loading screen: a portrait of Erik Satie loads cell by cell while loader stripes flicker in the border, then rests; NIRUX's Gymnopedie No. 1 plays as the pause music when installed; the prompt on black below |
 | `cava` | Large clock above the spectrum or a quote; lock state, away time and prompt below |
 | `minimal` | Centred clock, lock state, away time and prompt |
 | `terminal` | Left-aligned monospace screen with a `~$ lock` line |
@@ -231,11 +232,48 @@ server 2 to 3 %) and about 10 MB of memory. Very large screens get fewer
 frames a second, and with the display off nothing is drawn and the game
 waits.
 
+### The satie layout
+
+![The satie layout](docs/screenshots/satie.png)
+
+`layout = "satie"` is a Commodore 64 game loading from tape, except that
+the game is Erik Satie. The screen says PRESS PLAY ON TAPE, searches, finds
+ERIK SATIE and loads: the picture comes in character cell by character
+cell, top to bottom, first in greys while coloured loader stripes flicker
+in the wide border, then the colours, cell by cell, until it says READY. and
+the border settles. Every five minutes it loads again. Under the picture a
+text strip in NIRUSID's 8x8 font shows ERIK SATIE 1866-1925, GYMNOPEDIES,
+the clock and, once loaded, the tune that plays (`ERIK SATIE - GYMNOPEDIE
+NO. 1`) or READY. and the away time.
+
+The picture is Henri Manuel's photograph of Satie from about 1920, which is
+in the public domain (source and licence in [docs/CREDITS.md](docs/CREDITS.md)),
+converted offline by `tools/satie-picture.py` to a C64 multicolour bitmap:
+160x200 pixels twice as wide as tall, six brightness levels with ordered
+dithering. The levels take the active theme's colours at run time (black, a
+dark grey, the accent in three shades and white), so the niru-satie theme
+gives a sepia portrait and a grey theme a black and white one.
+
+When NIRUX has installed its arrangement of Gymnopedie No. 1
+(`~/.local/share/nirux/music/nirux-12-gymnopedie.ogg`), it is the pause
+music of this layout, played on its own again and again; the usual
+`[pause_music]` rules decide whether music plays at all (by default for
+manual locks). Without it the layout plays the usual pause music. While
+music plays, the settled border brightens a little on the beat.
+
+The clock, the password prompt, the away time, the keyboard layout, Caps
+Lock and failure messages sit on black below the picture in the theme font;
+a failed attempt turns the border to the warning colour. Every monitor
+shows the same picture. Only the rows that change are drawn, so the loaded
+picture costs next to nothing to keep: in Xvfb at 1920x1080 the lock used
+0.1 to 0.2 % of one core at rest, about 1 % while loading, and about 11 MB
+of memory. With the display off nothing is drawn.
+
 ### Music or quotes
 
 `visual` decides what the `cava` and `ascii-cava` layouts show where the
 spectrum is drawn (in `demo`, `auto` means quotes in the scroller and the
-beat flash while music plays, in `attract` only the beat flash; `quotes` keeps the quotes and no flash,
+beat flash while music plays, in `attract` and `satie` only the beat flash; `quotes` keeps the quotes and no flash,
 `music` or `cava` the flash without quotes, `none` neither):
 
 | Value | Shows |
@@ -304,7 +342,7 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
 [config.example.toml](config.example.toml).
 
 ```toml
-layout = "ascii-cava"      # ascii-cava, ascii, demo, attract, cava, minimal, terminal, runic, corner
+layout = "ascii-cava"      # ascii-cava, ascii, demo, attract, satie, cava, minimal, terminal, runic, corner
 visualizer = true
 visual = "auto"            # auto, music, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns

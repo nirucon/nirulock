@@ -212,6 +212,40 @@ i=0
 while player_alive && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
 if player_alive; then echo "FAIL pw-play outlived the lock"; fails=$((fails + 1)); fi
 
+# The satie layout plays NIRUX's Gymnopedie on its own when it is installed
+# in the NIRUX music folder, whatever else is there; without it the usual
+# pause music plays.
+satie() {
+  rm -f "$T/started" "$T/players" "$T/pw-args"
+  "$BIN" --reason manual > "$T/lock.log" 2>&1 &
+  LOCK=$!
+  i=0
+  while [ "$i" -lt 80 ] && [ ! -s "$T/pw-args" ]; do sleep 0.1; i=$((i + 1)); done
+  played=$(cut -d'|' -f4 "$T/pw-args" 2>/dev/null || :)
+  kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=""
+  i=0
+  while player_alive && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+}
+rm -f "$MUSIC"/*
+: > "$MUSIC/nirux-1-test-tune.ogg"
+: > "$MUSIC/nirux-2-other.ogg"
+: > "$MUSIC/nirux-12-gymnopedie.ogg"
+printf 'layout = "satie"\n' > "$XDG_CONFIG_HOME/niruui/lock.toml"
+for round in 1 2 3; do
+  satie
+  if [ "$played" = "$MUSIC/nirux-12-gymnopedie.ogg" ]; then
+    echo "OK   satie plays the Gymnopedie (round $round)"
+  else
+    echo "FAIL satie played '$played'"; fails=$((fails + 1))
+  fi
+done
+rm "$MUSIC/nirux-12-gymnopedie.ogg"
+satie
+case $played in
+  "$MUSIC"/nirux-[12]-*.ogg) echo "OK   satie without the Gymnopedie plays the folder" ;;
+  *) echo "FAIL satie without the Gymnopedie played '$played'"; fails=$((fails + 1)) ;;
+esac
+
 if [ "$fails" -ne 0 ]; then
   echo "FAIL: $fails pause music reason checks failed"
   exit 1

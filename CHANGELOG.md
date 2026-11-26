@@ -3,6 +3,33 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.32.0 (2026-11-26)
+
+### Added
+
+- **`layout = "satie"`, a C64 tape loading screen of Erik Satie.** PRESS
+  PLAY ON TAPE, SEARCHING, FOUND ERIK SATIE, and the portrait loads
+  character cell by cell, first in greys while coloured loader stripes
+  flicker in the wide border, then in colour, until READY. and the border
+  settles; it loads again every five minutes. A text strip in NIRUSID's 8x8
+  font shows ERIK SATIE 1866-1925, GYMNOPEDIES, the clock and the tune as
+  `ARTIST - TITLE`. The clock, prompt, away time, keyboard layout, Caps Lock
+  and failure messages stay on black below; a failed attempt turns the
+  border to the warning colour; the settled border brightens on the beat.
+- The picture is Henri Manuel's public domain photograph of Satie (about
+  1920, Wikimedia Commons, `docs/CREDITS.md`), converted offline by the new
+  `tools/satie-picture.py` to a 160x200 multicolour bitmap with six
+  brightness levels and ordered dithering (16 KB in the binary), coloured
+  from the active theme at run time.
+- With `layout = "satie"`, NIRUX's Gymnopedie No. 1
+  (`nirux-12-gymnopedie.ogg` in the NIRUX music folder) is the pause music,
+  played on its own again and again, when it is installed; otherwise the
+  usual pause music plays. The `[pause_music]` rules are unchanged.
+- Frugal: only changed rows are drawn (PutImage); about 1 % of one core
+  while loading and 0.1 % at rest in Xvfb at 1920x1080, nothing with the
+  display off. `tests/resource-check.sh` and `tests/pause-music-reason.sh`
+  cover it.
+
 ## 0.31.0 (2026-11-26)
 
 ### Added

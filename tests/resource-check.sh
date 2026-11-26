@@ -216,3 +216,25 @@ else
 fi
 kill -0 "$LOCK" || fail "the lock exited"
 printf 'PASS: the attract mode plays frugally\n'
+
+# The satie layout: the picture loads (with border stripes) at about 25
+# frames a second, then rests and costs nearly nothing.
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+printf 'layout = "satie"\n' > "$TEST/config/niruui/lock.toml"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-satie.log" 2>&1 & LOCK=$!
+sleep 7
+kill -0 "$LOCK" || { cat "$TEST/lock-satie.log"; exit 1; }
+loading_cpu=$(cpu "$LOCK" 4)
+loading_frames=$(frames)
+printf 'satie loading: nirulock %s%% CPU, %s distinct frames of 5\n' "$loading_cpu" "$loading_frames"
+[ "$loading_frames" -ge 4 ] || fail "the satie picture did not load visibly"
+awk -v c="$loading_cpu" 'BEGIN { exit !(c <= 5.0) }' || fail "satie loading CPU above 5%"
+sleep 14
+rest_cpu=$(cpu "$LOCK" 6)
+rest_frames=$(frames)
+printf 'satie loaded: nirulock %s%% CPU, %s distinct frames of 5\n' "$rest_cpu" "$rest_frames"
+# Two when the clock turns a minute in between.
+[ "$rest_frames" -le 2 ] || fail "the loaded satie picture kept changing"
+awk -v c="$rest_cpu" 'BEGIN { exit !(c <= 0.5) }' || fail "satie CPU above 0.5% at rest"
+kill -0 "$LOCK" || fail "the lock exited"
+printf 'PASS: the satie picture loads and then rests\n'

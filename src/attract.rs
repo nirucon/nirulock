@@ -25,7 +25,7 @@
 
 use crate::{
     arcade,
-    chunky::{self, Canvas, Logical, Palette, Placement, COLOURS},
+    chunky::{self, spots, Canvas, Logical, Palette, Screen, COLOURS},
     demo::{self, Spots},
     display::Area,
     layout, Lock, Result,
@@ -38,85 +38,13 @@ const MAX_RECTS: usize = 4096;
 /// The longest stretch of game time made up after a pause.
 const CATCH_UP: f32 = 0.2;
 
-/// One monitor: where the playfield goes (none when it does not fit), the
-/// frame's thickness, and the black area for the prompt lines.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Screen {
-    pub place: Option<Placement>,
-    pub bezel: i32,
-    pub prompt_top: i32,
-    pub prompt_bottom: i32,
-}
-
-impl Screen {
-    /// The playfield on the screen, frame included.
-    pub fn outer(&self) -> Option<(i32, i32, i32, i32)> {
-        self.place.map(|p| {
-            let (x, y, w, h) = p.rect(arcade::W, arcade::H);
-            let b = self.bezel;
-            (x - b, y - b, w + 2 * b, h + 2 * b)
-        })
-    }
-}
-
 /// Lay out one monitor. `block` is the height the prompt lines need (0 on
-/// the other monitors).
+/// the other monitors). The frame is two canvas pixels thick, 2 to 8
+/// screen pixels.
 pub fn arrange(area: Area, block: i32) -> Screen {
-    let y = i32::from(area.y);
-    let (w, h) = (i32::from(area.width).max(1), i32::from(area.height).max(1));
-    let margin = (h * 3 / 100).max(4);
-    let max_bezel = 8;
-    let room_h = if block > 0 {
-        h - block - 3 * margin - 2 * max_bezel
-    } else {
-        h - 2 * margin - 2 * max_bezel
-    };
-    let room_w = w * 94 / 100 - 2 * max_bezel;
-    let scale = chunky::scale_for(arcade::W, arcade::H, 1, room_w, room_h);
-    if scale == 0 {
-        return Screen {
-            place: None,
-            bezel: 0,
-            prompt_top: y + margin,
-            prompt_bottom: y + h - margin,
-        };
-    }
-    let bezel = (scale * 2).clamp(2, max_bezel);
-    let field_h = arcade::H * scale;
-    let top = if block > 0 {
-        // The playfield and the prompt as one block, centred.
-        let total = field_h + 2 * bezel + margin + block;
-        y + ((h - total) / 2).max(margin) + bezel
-    } else {
-        y + (h - field_h) / 2
-    };
-    let place = chunky::centred(area, arcade::W, scale, 1, top);
-    Screen {
-        place: Some(place),
-        bezel,
-        prompt_top: top + field_h + bezel + margin,
-        prompt_bottom: y + h - margin,
-    }
-}
-
-/// The prompt lines in the black area of `s`.
-pub fn spots(s: &Screen, u: i32, clock_ascent: i32, info_ascent: i32, music: bool) -> Spots {
-    let block = demo::prompt_block(u, clock_ascent, music);
-    let (top, bottom) = (s.prompt_top, s.prompt_bottom);
-    let start = (top + (bottom - top - block) / 4).max(top);
-    let info = start + info_ascent;
-    let clock = start + if music { u * 2 } else { 0 } + clock_ascent;
-    let entry = clock + u * 2;
-    let away = entry + u * 3 / 2;
-    Spots {
-        info: layout::clamp16(info),
-        clock: layout::clamp16(clock),
-        entry: layout::clamp16(entry),
-        away: layout::clamp16(away),
-        rows: away + u * 19 / 10,
-        step: u * 5 / 4,
-        limit: bottom - u / 2,
-    }
+    chunky::arrange(area, block, arcade::W, arcade::H, |scale| {
+        (scale * 2).clamp(2, 8)
+    })
 }
 
 /// The layout's state between frames.

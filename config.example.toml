@@ -16,12 +16,15 @@ font_size = 22.0
 # style shoot 'em up, plays itself in a framed 320x200 playfield (title,
 # high scores, a game, GAME OVER, again); the tune shows as ARTIST - TITLE
 # and explosions flash on the beat. The prompt stays on black below it.
+# satie: a C64 tape loading screen of Erik Satie: his portrait loads cell
+# by cell while loader stripes flicker in the border; NIRUX's Gymnopedie
+# No. 1 (nirux-12-gymnopedie.ogg) is the pause music when installed.
 # cava: a large clock above the spectrum or a quote.
 layout = "ascii-cava"
 visualizer = true
 # What the cava and ascii-cava layouts show where the spectrum is drawn
-# (demo: "auto" means quotes in the scroller and the beat flash; attract:
-# the beat flash only):
+# (demo: "auto" means quotes in the scroller and the beat flash; attract and
+# satie: the beat flash only):
 #   "auto"   the CAVA spectrum only while music or radio plays, otherwise a
 #            quote from ~/.config/niru/quotes/ in cava, nothing in ascii-cava
 #            (the default)
