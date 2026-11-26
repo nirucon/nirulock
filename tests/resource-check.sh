@@ -238,3 +238,25 @@ printf 'satie loaded: nirulock %s%% CPU, %s distinct frames of 5\n' "$rest_cpu" 
 awk -v c="$rest_cpu" 'BEGIN { exit !(c <= 0.5) }' || fail "satie CPU above 0.5% at rest"
 kill -0 "$LOCK" || fail "the lock exited"
 printf 'PASS: the satie picture loads and then rests\n'
+
+# The bbs layout: the modem dials and the board arrives, then it rests with
+# only the cursor blinking and costs nearly nothing.
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+printf 'layout = "bbs"\n' > "$TEST/config/niruui/lock.toml"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-bbs.log" 2>&1 & LOCK=$!
+sleep 2.5
+kill -0 "$LOCK" || { cat "$TEST/lock-bbs.log"; exit 1; }
+call_cpu=$(cpu "$LOCK" 3)
+call_frames=$(frames)
+printf 'bbs call: nirulock %s%% CPU, %s distinct frames of 5\n' "$call_cpu" "$call_frames"
+[ "$call_frames" -ge 2 ] || fail "the bbs call did not show"
+awk -v c="$call_cpu" 'BEGIN { exit !(c <= 3.0) }' || fail "bbs CPU above 3% while calling"
+sleep 8
+rest_cpu=$(cpu "$LOCK" 6)
+rest_frames=$(frames)
+printf 'bbs online: nirulock %s%% CPU, %s distinct frames of 5\n' "$rest_cpu" "$rest_frames"
+# The cursor blinks; three when the clock turns a minute in between.
+[ "$rest_frames" -le 3 ] || fail "the bbs board kept changing"
+awk -v c="$rest_cpu" 'BEGIN { exit !(c <= 0.5) }' || fail "bbs CPU above 0.5% at rest"
+kill -0 "$LOCK" || fail "the lock exited"
+printf 'PASS: the bbs board arrives and then rests\n'

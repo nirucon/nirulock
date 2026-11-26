@@ -279,3 +279,73 @@ present and playable, the music thread plays that one file again and again
 instead of scanning the folder; the start gate, the lock reasons, Esc and
 the display-off stop work as for any pause music. Without it the folder
 plays as usual.
+
+## The bbs layout (`layout = "bbs"`)
+
+The screen is 80 columns by 30 rows of 8x16 character cells (a 640x480
+canvas), shown at the largest whole scale that fits each monitor, centred,
+on every monitor; the prompt is part of it. A call follows a timeline
+(`bbs::Phase`). The first call types `ATZ` and `AT&F1 M1 L1` (each answered
+`OK`) in its first 2.2 seconds, then waits, at most until the pause music's
+start gate decides (two to five seconds after locking), so that the dialing
+and the handshake sound begin together. From the dial: `ATDT 555-64789`
+(typed at once), `RINGING` at 2 s, `CARRIER 14400`, `PROTOCOL: LAP-M`,
+`COMPRESSION: V.42BIS` and `CONNECT 14400/ARQ/V42BIS` at 5.75 s, and from
+6.45 s the board arrives row by row at 1,440 characters a second (14400
+bps, ten bits a character), about 1.7 seconds for the whole screen. A key
+that reaches the lock (anything typed, Backspace, Escape) skips to the
+board, and so does a check or a failed attempt.
+
+Five minutes after a call began a new one starts (`NO CARRIER`, then the
+dial again, without the reset and without sound) if the entry is empty, no
+key came in the last minute and no attempt has failed in this lock; the
+message of the day changes with it. With `[motion] reduced = true` in
+`~/.config/niruwm/appearance.toml` (the appearance contract, schema 1) the
+board shows at once, the cursor and the lights stay still and the line
+never drops.
+
+The board's static part is `assets/nirux-bbs.ans`, read once: CP437 bytes,
+CR and LF, and SGR colour codes (bold for a bright foreground, blink for a
+bright background as with iCE colours), up to the end-of-file mark before
+the SAUCE record; a line wraps after the 80th column. The values, the
+message of the day, the tune, the prompt, the lines under it and the status
+bar are written into a copy every frame. Block elements, the three shades,
+the single and double box lines and a few symbols (`·`, `■`, the notes) are
+drawn from fixed pixel patterns; printable ASCII uses NIRUSID's 8x8 font
+with every row doubled; any other code is a small block, so nothing ever
+depends on a font.
+
+The ANSI colours map to the theme palette of the chunky layouts (accent,
+its cool and warm neighbours, warning and greys, each from the active
+theme): 0 black, 1 red the warning colour, 2 green the warm neighbour,
+3 brown the accent dark, 4 blue the cool neighbour dark, 5 magenta the warm
+neighbour dark, 6 cyan the cool neighbour, 7 light grey, 8 dark grey,
+9 light red the warning light, 10 light green the warm neighbour light,
+11 yellow the accent light, 12 light blue the accent, 13 light magenta the
+muted grey, 14 light cyan the cool neighbour light, 15 white.
+
+Each frame the cells that differ from the last frame are drawn into the
+canvas, and the canvas rows they cover are sent with PutImage (at most 200
+KB a request) and copied to the screen. While a call runs the layout looks
+every 40 ms; online it wakes for the cursor's blink (every 0.53 s), while
+pause music plays every 80 ms for the RD light (the bass of the CAVA
+spectrum, as in the demo), and for the SD light going out 150 ms after a
+key. With the display off nothing is drawn.
+
+### The modem handshake
+
+With `layout = "bbs"`, `modem::wav` makes a 5.9 second mono WAV file
+(22,050 Hz, 16 bit): 0.3 s of silence, a dial tone (350 and 440 Hz), the
+touch tones of 555-64789, one ring back (440 and 480 Hz), the 2100 Hz
+answer tone with a phase reversal, two short tones, and the training hiss
+from a 23-bit noise register like the SID's, over a faint carrier. Square
+and triangle voices with 8 ms attack and release go through a one-pole
+low-pass at 3.5 kHz; the peak is 0.16 of full scale. The music thread
+writes it, when the start gate has opened, to
+`$XDG_RUNTIME_DIR/nirulock-intro-PID.wav` (a new file, mode 0600, never
+following a link; the temporary directory without a runtime directory),
+plays it once with the first audio player found, as an isolated child like
+every tune (its own session, no terminal, killed with the lock, excluded
+from "other audio"), removes it, and goes on with the pause music. Esc,
+suspend and the display going off stop it like the music. Without an audio
+player, or when the file cannot be written, the music starts without it.

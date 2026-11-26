@@ -336,8 +336,14 @@ impl Music {
     /// Scan the folder and look for the players on the music thread; the
     /// caller decides when to [`Music::play`].
     /// With `only`, that one file plays (again and again) when a player
-    /// can play it, instead of the folder.
-    pub fn start(settings: &Settings, only: Option<PathBuf>) -> Option<Self> {
+    /// can play it, instead of the folder. With `intro`, the WAV file it
+    /// makes plays once before the first tune (the `bbs` layout's modem
+    /// handshake), when an audio player is there.
+    pub fn start(
+        settings: &Settings,
+        only: Option<PathBuf>,
+        intro: Option<fn() -> Vec<u8>>,
+    ) -> Option<Self> {
         let (wake, notify) = UnixStream::pair().ok()?;
         wake.set_nonblocking(true).ok()?;
         notify.set_nonblocking(true).ok()?;
@@ -360,6 +366,7 @@ impl Music {
                     &thread_shared,
                     &folder,
                     only.as_deref(),
+                    intro,
                     track_seconds,
                     shuffle,
                     &receive,
@@ -425,6 +432,11 @@ impl Music {
 
     pub fn deadline(&self) -> Option<Instant> {
         self.gate.deadline(Instant::now())
+    }
+
+    /// The start is not decided yet (the gate window is open).
+    pub fn deciding(&self) -> bool {
+        self.gate.decided().is_none()
     }
 
     pub fn wake_fd(&self) -> Option<std::os::fd::RawFd> {
@@ -947,10 +959,12 @@ struct Prepared {
     kind: Kind,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn player(
     shared: &Shared,
     folder: &Path,
     only: Option<&Path>,
+    intro: Option<fn() -> Vec<u8>>,
     track_seconds: u32,
     shuffle: bool,
     receive: &mpsc::Receiver<Request>,
@@ -973,6 +987,7 @@ fn player(
         shared,
         folder,
         tunes,
+        intro,
         track_seconds,
         shuffle,
         receive,
@@ -1013,6 +1028,7 @@ fn play_tunes(
     shared: &Shared,
     folder: &Path,
     tunes: Vec<PathBuf>,
+    intro: Option<fn() -> Vec<u8>>,
     track_seconds: u32,
     shuffle: bool,
     receive: &mpsc::Receiver<Request>,
@@ -1032,6 +1048,12 @@ fn play_tunes(
     };
     if shared.stopped.load(Ordering::Acquire) {
         return;
+    }
+    if let (Some(make), Some((player, program))) = (intro, players.audio.first()) {
+        if !play_intro(shared, make, *player, program, receive, exclusions.as_ref()) {
+            let _ = notify.write(&[1]);
+            return;
+        }
     }
     let has_sid = tunes.iter().any(|t| kind(t) == Some(Kind::Sid));
     let lengths = has_sid.then(|| find_songlengths(folder)).flatten();
@@ -1208,6 +1230,78 @@ fn play_tunes(
         }
     }
 }
+
+/// Where the intro is written: the user's runtime directory (private to
+/// the user), or the temporary directory.
+fn intro_path() -> PathBuf {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(std::env::temp_dir);
+    base.join(format!("nirulock-intro-{}.wav", std::process::id()))
+}
+
+/// Write the intro to a new private file, play it once to its end and
+/// remove it. False when the music was stopped meanwhile (the thread ends);
+/// a file that cannot be written or played is skipped quietly.
+fn play_intro(
+    shared: &Shared,
+    make: fn() -> Vec<u8>,
+    player: AudioPlayer,
+    program: &Path,
+    receive: &mpsc::Receiver<Request>,
+    exclusions: Option<&crate::audio::Exclusions>,
+) -> bool {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = intro_path();
+    // A new file only (never follows a link or reuses one), readable by
+    // the user alone.
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+    else {
+        // Something is already there: not ours to touch.
+        return true;
+    };
+    if file.write_all(&make()).is_err() {
+        let _ = std::fs::remove_file(&path);
+        return true;
+    }
+    drop(file);
+    let (program, args) = audio_command(player, program, &path);
+    let mut child = match spawn_isolated(&program, &args) {
+        Ok(child) => child,
+        Err(_) => {
+            let _ = std::fs::remove_file(&path);
+            return true;
+        }
+    };
+    shared.pgid.store(child.id() as i32, Ordering::Release);
+    if let Some(exclusions) = exclusions {
+        exclusions.set(&[child.id()]);
+    }
+    let deadline = Instant::now() + INTRO_LIMIT;
+    let stop = loop {
+        if shared.stopped.load(Ordering::Acquire) {
+            break true;
+        }
+        if !matches!(child.try_wait(), Ok(None)) || Instant::now() >= deadline {
+            break false;
+        }
+        match receive.recv_timeout(Duration::from_millis(100)) {
+            Ok(Request::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break true,
+            Ok(Request::Play(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    };
+    finish(shared, &mut child);
+    let _ = std::fs::remove_file(&path);
+    !stop && !shared.stopped.load(Ordering::Acquire)
+}
+
+/// The intro is a few seconds long; a player that hangs on it is stopped.
+const INTRO_LIMIT: Duration = Duration::from_secs(12);
 
 /// The emulation option this sidplayfp needs, read from its `--help`.
 ///
@@ -1737,7 +1831,7 @@ mod tests {
             folder: "/nonexistent/nirulock-test".into(),
             ..Settings::default()
         };
-        let mut music = Music::start(&settings, None).expect("music thread");
+        let mut music = Music::start(&settings, None, None).expect("music thread");
         // The thread finds no tunes and ends, closing its end of the socket.
         for _ in 0..200 {
             music.woke();

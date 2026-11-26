@@ -26,6 +26,8 @@ pub enum Layout {
     Attract,
     /// A C64 loading screen of Erik Satie, with his Gymnopedie.
     Satie,
+    /// NIRUX BBS: a dial-up bulletin board in ANSI art.
+    Bbs,
 }
 
 impl Layout {
@@ -40,7 +42,7 @@ impl Layout {
     pub fn has_panel(self) -> bool {
         matches!(
             self,
-            Self::Cava | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie
+            Self::Cava | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie | Self::Bbs
         )
     }
 
@@ -48,7 +50,7 @@ impl Layout {
     pub fn animates(self) -> bool {
         matches!(
             self,
-            Self::Ascii | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie
+            Self::Ascii | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie | Self::Bbs
         )
     }
 
@@ -64,6 +66,7 @@ impl Layout {
             "demo" => Some(Self::Demo),
             "attract" => Some(Self::Attract),
             "satie" => Some(Self::Satie),
+            "bbs" => Some(Self::Bbs),
             _ => None,
         }
     }
@@ -80,6 +83,7 @@ impl Layout {
             Self::Demo => "demo",
             Self::Attract => "attract",
             Self::Satie => "satie",
+            Self::Bbs => "bbs",
         }
     }
 }
@@ -148,6 +152,9 @@ pub struct Config {
     pub show_hostname: bool,
     /// `[pause_music]`: NIRUX music or SID tunes while locked (on by default, for manual locks).
     pub pause_music: crate::music::Settings,
+    /// `[motion] reduced` in the appearance contract: layouts that animate
+    /// keep still (the `bbs` layout shows its board at once).
+    pub reduced_motion: bool,
 }
 
 /// The built-in suite themes, for a component that does not carry the
@@ -228,6 +235,11 @@ fn appearance_value(base: &Path) -> Option<toml::Value> {
         }
     }
     Some(value)
+}
+
+/// `[motion] reduced` of the appearance contract.
+fn reduced_motion(appearance: &toml::Value) -> Option<bool> {
+    appearance.get("motion")?.get("reduced")?.as_bool()
 }
 
 fn appearance_colour(appearance: &toml::Value, key: &str) -> Option<String> {
@@ -319,6 +331,7 @@ impl Default for Config {
             lock_timeout_minutes: 0,
             show_hostname: false,
             pause_music: crate::music::Settings::default(),
+            reduced_motion: false,
         }
     }
 }
@@ -406,7 +419,7 @@ impl Config {
         }
         if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
             cfg.layout = Layout::parse(layout).ok_or_else(|| {
-                "layout must be ascii-cava, ascii, demo, attract, satie, cava, minimal, terminal, runic or corner"
+                "layout must be ascii-cava, ascii, demo, attract, satie, bbs, cava, minimal, terminal, runic or corner"
                     .to_string()
             })?;
         }
@@ -477,6 +490,9 @@ impl Config {
                 {
                     cfg.font_size = size as f32;
                 }
+            }
+            if let Some(reduced) = reduced_motion(&appearance) {
+                cfg.reduced_motion = reduced;
             }
             if v.get("font_path").is_none() {
                 if let Some(path) = appearance
@@ -627,6 +643,10 @@ mod tests {
         assert_eq!(Layout::parse("Satie"), Some(Layout::Satie));
         assert_eq!(Layout::Satie.as_str(), "satie");
         assert!(Layout::Satie.animates() && Layout::Satie.has_panel());
+        assert_eq!(Layout::parse("BBS"), Some(Layout::Bbs));
+        assert_eq!(Layout::Bbs.as_str(), "bbs");
+        assert!(Layout::Bbs.animates() && Layout::Bbs.has_panel());
+        assert!(!Layout::Bbs.is_ascii());
         assert!(Layout::parse("noir-ish").is_none());
         // The default stays NIRUX ascii; demo is chosen in lock.toml.
         let c = |text: &str| Config::from_value(&text.parse().unwrap());
@@ -641,9 +661,25 @@ mod tests {
             .contains("\nlayout: attract\n"));
         let err = c("layout = \"amiga\"").unwrap_err().to_string();
         assert!(
-            err.contains("demo") && err.contains("attract") && err.contains("satie"),
+            err.contains("demo")
+                && err.contains("attract")
+                && err.contains("satie")
+                && err.contains("bbs"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn reduced_motion_comes_from_the_appearance_contract() {
+        assert!(!Config::default().reduced_motion);
+        let v = |text: &str| text.parse::<toml::Value>().unwrap();
+        assert_eq!(
+            reduced_motion(&v("schema = 1\n[motion]\nreduced = true")),
+            Some(true)
+        );
+        assert_eq!(reduced_motion(&v("[motion]\nreduced = false")), Some(false));
+        assert_eq!(reduced_motion(&v("[motion]\nreduced = \"yes\"")), None);
+        assert_eq!(reduced_motion(&v("schema = 1")), None);
     }
 
     #[test]

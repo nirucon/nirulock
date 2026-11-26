@@ -3,6 +3,61 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.33.0 (2026-11-26)
+
+### Added
+
+- **`layout = "bbs"`, NIRUX BBS: a dial-up bulletin board of the modem
+  era.** The lock screen is a terminal on an 80x30 text screen. The modem
+  is reset (`ATZ`, `OK`), dials (`ATDT 555-64789`, `RINGING`), gets its
+  carrier (`CARRIER 14400`, `PROTOCOL: LAP-M`, `COMPRESSION: V.42BIS`,
+  `CONNECT 14400/ARQ/V42BIS`), and the board's ANSI screen arrives cell by
+  cell at the speed of the line: an ANSI picture of Yggdrasil under the
+  moon in a double frame, a NIRUX logo in half blocks with a shine and a
+  drop shadow, a system box (node, connection, date, time, time online and
+  status), the message of the day (a quote from the `quotes` collections,
+  its source on the box's bottom line), `NOW PLAYING  ARTIST - TITLE` while
+  pause music plays, and the `LOGIN: SYSOP` and `PASSWORD:` prompt. A
+  terminal status bar shows NIRUTERM, the keyboard layout, the line, the
+  time online, Caps Lock and the modem's lights (HS AA CD OH RD SD TR MR):
+  SD lights when a key is typed, RD flickers on the beat. Every five
+  minutes the line drops (`NO CARRIER`) and the board is called again,
+  unless someone typed in the last minute or a login failed. Typing skips
+  the call and shows the board at once.
+- The password entry honours `prompt_echo` (stars or the pulse) with a
+  blinking cursor; a failed attempt says `ACCESS DENIED: INVALID PASSWORD`
+  in the warning colour, the status reads ACCESS DENIED, and then
+  `1 FAILED LOGIN ATTEMPT`, PAM's own message and `CAPS LOCK IS ON` stay
+  under the prompt. Grabs, PAM, multi-monitor (every monitor shows the
+  board), display off and DPMS work as in every layout. No user or host
+  name is shown: the login is always SYSOP.
+- The static board is a real ANSI file, `assets/nirux-bbs.ans` (CP437,
+  ANSI colours, iCE colours, a SAUCE record), drawn reproducibly by the
+  new `tools/bbs-art.py`, which paints the tree from shapes and fits it
+  cell by cell to the block and shade characters. Block, shade and box
+  characters are drawn as exact pixel patterns, so they need no font and
+  always join; text is NIRUSID's 8x8 font at double height, as on a CGA
+  screen. The 16 ANSI colours are roles on the active NIRUX theme (the
+  accent and its cool and warm neighbours in three shades, the warning
+  colour and greys), so niru-satie gives a sepia board and a brown tree.
+- **A modem handshake in SID style.** With `layout = "bbs"` the pause
+  music starts with about six seconds of dial tone, touch tones, a ring,
+  the answer tone and the training hiss, synthesized by NIRULOCK itself
+  from square, triangle and noise voices through a gentle low-pass (peak
+  about -20 dBFS), written as a WAV file to the runtime directory (mode
+  0600, removed afterwards) and played by the usual audio player; the
+  dialing on screen follows it. It plays only when the pause music plays
+  (by default for manual locks), and Esc stops it like the music.
+- `[motion] reduced = true` in the appearance contract is now read: the
+  bbs layout then shows its board at once, the cursor does not blink and
+  the line never drops.
+- Frugal: only the character cells that changed are drawn (PutImage of
+  their rows). In Xvfb at 1920x1080 the lock used about 0.3 % of one core
+  while calling and 0.1 to 0.2 % online (the cursor blinks), 0 % with
+  reduced motion, and about 11 MB of memory; nothing is drawn with the
+  display off. `tests/resource-check.sh` and `tests/pause-music-reason.sh`
+  cover it.
+
 ## 0.32.0 (2026-11-26)
 
 ### Added

@@ -16,6 +16,7 @@ mod arcade;
 mod ascii;
 mod attract;
 mod audio;
+mod bbs;
 mod cava;
 mod chunky;
 mod config;
@@ -24,6 +25,7 @@ mod demo;
 mod display;
 mod keyboard;
 mod layout;
+mod modem;
 mod music;
 mod palette;
 mod pam;
@@ -223,6 +225,7 @@ struct Lock {
     demo: demo::State,
     attract: attract::State,
     satie: satie::State,
+    bbs: bbs::State,
     spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
@@ -281,7 +284,13 @@ impl Lock {
         let music = cfg
             .pause_music
             .plays_for(reason)
-            .then(|| music::Music::start(&cfg.pause_music, satie_tune(cfg.layout)))
+            .then(|| {
+                music::Music::start(
+                    &cfg.pause_music,
+                    satie_tune(cfg.layout),
+                    (cfg.layout == config::Layout::Bbs).then_some(modem::wav as fn() -> Vec<u8>),
+                )
+            })
             .flatten();
         let music_audio = (music.is_some() && visual.as_ref().and_then(|v| v.audio()).is_none())
             .then(|| audio::Audio::start("nirulock", None));
@@ -354,6 +363,7 @@ impl Lock {
             demo: demo::State::default(),
             attract: attract::State::default(),
             satie: satie::State::default(),
+            bbs: bbs::State::default(),
             spectrum_rect: None,
             ready: false,
             caps,
@@ -691,6 +701,11 @@ impl Lock {
     }
 
     fn draw(&mut self) -> Result<()> {
+        if self.cfg.layout == config::Layout::Bbs {
+            // The board draws the prompt and everything else itself.
+            self.spectrum_rect = None;
+            return self.bbs_draw();
+        }
         let pal = self.cfg.palette.clone();
         self.surface.clear(pal.background)?;
         self.spectrum_rect = None;
@@ -1061,6 +1076,8 @@ impl Lock {
                     row += spots.step;
                 }
             }
+            // Drawn by `bbs_draw` before any of this.
+            config::Layout::Bbs => {}
             config::Layout::Demo | config::Layout::Attract | config::Layout::Satie => {
                 let spots = match self.cfg.layout {
                     config::Layout::Demo => {
@@ -1204,7 +1221,8 @@ impl Lock {
                 | config::Layout::AsciiCava
                 | config::Layout::Demo
                 | config::Layout::Attract
-                | config::Layout::Satie => (None, ascii_info.unwrap_or(mid - line * 3)),
+                | config::Layout::Satie
+                | config::Layout::Bbs => (None, ascii_info.unwrap_or(mid - line * 3)),
             };
             let (x, baseline) = match at {
                 (Some(x), baseline) => (x, baseline),
@@ -1437,6 +1455,9 @@ impl Lock {
             }
             keyboard::Key::Nothing => self.typing.other_key(e.detail, e.time),
         }
+        if self.cfg.layout == config::Layout::Bbs {
+            self.bbs.key(Instant::now());
+        }
         self.draw()?;
         Ok(true)
     }
@@ -1578,12 +1599,19 @@ impl Lock {
                 if let Err(e) = self.satie_tick(display_on) {
                     eprintln!("nirulock: satie: {e}");
                 }
+            } else if self.cfg.layout == config::Layout::Bbs {
+                if let Err(e) = self.bbs_tick(display_on) {
+                    eprintln!("nirulock: bbs: {e}");
+                }
             }
             // The demo has no panel to paint: it reads the spectrum in its
             // own frames.
             let demo = matches!(
                 self.cfg.layout,
-                config::Layout::Demo | config::Layout::Attract | config::Layout::Satie
+                config::Layout::Demo
+                    | config::Layout::Attract
+                    | config::Layout::Satie
+                    | config::Layout::Bbs
             );
             if !repaint && !demo && (frame_due || panel_dirty) {
                 if let Err(e) = self.draw_cava_frame() {
@@ -1790,6 +1818,9 @@ impl Lock {
             ms = ms.min(next.as_millis() as u64);
         }
         if let Some(next) = self.satie_timeout(display_on) {
+            ms = ms.min(next.as_millis() as u64);
+        }
+        if let Some(next) = self.bbs_timeout(display_on) {
             ms = ms.min(next.as_millis() as u64);
         }
         // A few milliseconds late is better than waking just before a boundary.

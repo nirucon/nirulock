@@ -28,7 +28,7 @@ unlocked screen.
   (`[SE] password:`) when more than one layout is configured.
 - Real XKB input via libxkbcommon (dead keys, AltGr, keypad, compose), loaded
   at run time with a built-in fallback.
-- Ten layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `attract` (a C64 shoot 'em up that plays itself, like an arcade game's attract mode), `satie` (a C64 loading screen of Erik Satie, with his Gymnopedie), `cava`, `minimal`, `terminal`, `runic` and `corner`.
+- Eleven layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `attract` (a C64 shoot 'em up that plays itself, like an arcade game's attract mode), `satie` (a C64 loading screen of Erik Satie, with his Gymnopedie), `bbs` (NIRUX BBS, a dial-up bulletin board in ANSI art, with a modem handshake), `cava`, `minimal`, `terminal`, `runic` and `corner`.
 - `visual = "auto"`: CAVA spectrum only while music plays, otherwise rotating
   quotes; CAVA and audio monitoring stop completely with the display off.
 - Password-length hiding with `prompt_echo = "pulse"`.
@@ -134,6 +134,7 @@ Choose one with `layout`:
 | `demo` | A Commodore 64 demo on every monitor: a big chunky NIRUX logo wobbling over moving raster bars and a starfield, and a sine scroller along the bottom with the time, the away time, the tune and a quote; the clock, prompt and away time in the calm black middle of the prompt monitor |
 | `attract` | An arcade cabinet in attract mode: NIRUX RAID, an original C64 style shoot 'em up, plays itself in a framed playfield (title, high scores, a game, GAME OVER, again); the clock, prompt and away time on black below it |
 | `satie` | A C64 tape loading screen: a portrait of Erik Satie loads cell by cell while loader stripes flicker in the border, then rests; NIRUX's Gymnopedie No. 1 plays as the pause music when installed; the prompt on black below |
+| `bbs` | NIRUX BBS: the modem dials a bulletin board and its ANSI screen arrives at 14400 bps: an ANSI Yggdrasil, the NIRUX logo, the system box, a quote as the message of the day, the tune, and a `LOGIN:` and `PASSWORD:` prompt; a SID style modem handshake starts the pause music |
 | `cava` | Large clock above the spectrum or a quote; lock state, away time and prompt below |
 | `minimal` | Centred clock, lock state, away time and prompt |
 | `terminal` | Left-aligned monospace screen with a `~$ lock` line |
@@ -269,11 +270,82 @@ picture costs next to nothing to keep: in Xvfb at 1920x1080 the lock used
 0.1 to 0.2 % of one core at rest, about 1 % while loading, and about 11 MB
 of memory. With the display off nothing is drawn.
 
+### The bbs layout
+
+![The bbs layout](docs/screenshots/bbs.png)
+
+`layout = "bbs"` calls NIRUX BBS, a bulletin board of the modem era, on an
+80x30 text screen. When the screen locks, the terminal resets the modem
+(`ATZ`, `OK`), dials `ATDT 555-64789` (555 is the made-up exchange of
+films, 64789 spells NIRUX on a phone), hears `RINGING`, gets its carrier
+(`CARRIER 14400`, `PROTOCOL: LAP-M`, `COMPRESSION: V.42BIS`,
+`CONNECT 14400/ARQ/V42BIS`), and the board's ANSI screen comes in cell by
+cell at the speed of the line, in about two seconds:
+
+- an ANSI picture of Yggdrasil, the world tree, under the moon and the
+  stars, in a double frame;
+- the NIRUX logo in half blocks with a shine and a drop shadow, over
+  BULLETIN BOARD;
+- the system box: node, connection, date, time, time online (since the
+  screen locked) and status (LOCKED, SYSOP AWAY);
+- the message of the day: a quote from the `quotes` collections, in
+  quotation marks, its source on the box's bottom line (a welcome from the
+  sysop without quotes);
+- `♫ NOW PLAYING  ARTIST - TITLE` while pause music plays (only the artist
+  and the title, as in `demo`);
+- `LOGIN: SYSOP` and `PASSWORD:` with a blinking cursor.
+
+The bottom line is the terminal's status bar: NIRUTERM, the keyboard layout
+(when more than one is configured), the line, the time online, Caps Lock
+and the modem's lights, HS AA CD OH RD SD TR MR. SD lights when a key is
+typed; RD flickers on the beat while music plays.
+
+The password entry honours `prompt_echo`. A failed attempt says
+`ACCESS DENIED: INVALID PASSWORD` in the warning colour, and the status in
+the box reads ACCESS DENIED; afterwards the failed attempts, PAM's own
+message (a faillock lockout) and `CAPS LOCK IS ON` stay under the prompt.
+The login is always SYSOP: no user or host name is shown. Typing skips the
+call and shows the board at once. Every five minutes the line drops
+(`NO CARRIER`) and the board is called again, unless someone typed in the
+last minute or a login failed. With `[motion] reduced = true` in the NIRUX
+appearance contract (`~/.config/niruwm/appearance.toml`) the board shows at
+once, the cursor does not blink and the line never drops.
+
+The board is a real ANSI file of the era, `assets/nirux-bbs.ans` (CP437
+characters, ANSI colours with iCE colours, a SAUCE record), drawn by
+`tools/bbs-art.py` (see [docs/CREDITS.md](docs/CREDITS.md)). The block,
+shade and box characters (`░▒▓█▀▄▌▐` and the single and double lines) are
+drawn as exact pixel patterns, so they need no font and always join up;
+letters and digits are NIRUSID's 8x8 pixel font at double height, as on a
+CGA screen, in capitals (Swedish and other letters lose their marks). The
+16 ANSI colours are roles on the active NIRUX theme: the accent in three
+shades (the logo, the bark), its cool neighbour (the boxes, the labels, the
+status bar), its warm neighbour (the leaves), the warning colour (red) and
+greys. niru-satie gives a sepia logo and a brown tree, niru-nord a frosty
+one.
+
+When the pause music plays (by default only for a manual lock), it starts
+with a modem handshake in SID style: dial tone, the number in touch tones,
+a ring, the answer tone and the training hiss, about six seconds, quiet
+(peak about -20 dBFS), synthesized by NIRULOCK from square, triangle and
+noise voices. It is written as a WAV file to the runtime directory and
+played once by the same audio player as the music (`pw-play`, `ffplay` or
+`mpv`), then the usual tunes follow; the dialing on screen waits for the
+music's start decision so the two go together. Esc stops it like the music.
+Without an audio player (only `sidplayfp`) the handshake is left out.
+
+Only the character cells that change are drawn. In Xvfb at 1920x1080 the
+lock used about 0.3 % of one core while calling, 0.1 to 0.2 % online (the
+cursor blinks twice a second), nothing with reduced motion, and about 11 MB
+of memory. With the display off nothing is drawn. The text screen is shown
+at the largest whole scale that fits each monitor (twice at 1920x1080), on
+every monitor.
+
 ### Music or quotes
 
 `visual` decides what the `cava` and `ascii-cava` layouts show where the
 spectrum is drawn (in `demo`, `auto` means quotes in the scroller and the
-beat flash while music plays, in `attract` and `satie` only the beat flash; `quotes` keeps the quotes and no flash,
+beat flash while music plays, in `attract` and `satie` only the beat flash, in `bbs` the message of the day and the RD light on the beat; `quotes` keeps the quotes and no flash,
 `music` or `cava` the flash without quotes, `none` neither):
 
 | Value | Shows |
@@ -342,7 +414,7 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
 [config.example.toml](config.example.toml).
 
 ```toml
-layout = "ascii-cava"      # ascii-cava, ascii, demo, attract, satie, cava, minimal, terminal, runic, corner
+layout = "ascii-cava"      # ascii-cava, ascii, demo, attract, satie, bbs, cava, minimal, terminal, runic, corner
 visualizer = true
 visual = "auto"            # auto, music, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns

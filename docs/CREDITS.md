@@ -33,3 +33,25 @@ come from the active NIRUX theme at run time.
 
 NIRUSID's 8x8 font (`src/pixfont.rs`), drawn for NIRUSID, MIT like this
 program. It is not the Commodore character set.
+
+## The NIRUX BBS screen (`layout = "bbs"`)
+
+The ANSI screen `assets/nirux-bbs.ans` is original work made for NIRULOCK,
+MIT like this program. There is no source image: `tools/bbs-art.py` paints
+Yggdrasil from shapes (balls of leaves lit from the upper right, the trunk,
+the branches, the roots, the ground, the full moon and the stars), fits
+it cell by cell to the CP437 block and shade characters with two colours
+each, draws the NIRUX logo from a small pixel font of its own, adds the
+frames and labels, and writes the file with a SAUCE record. It is
+reproducible:
+
+```sh
+python3 -I tools/bbs-art.py assets/nirux-bbs.ans
+```
+
+which gives 8,710 bytes with SHA-256
+`5115b094f692c87bb031a4d7e3c0769d282e7f7523af14e4520ca90dd4b739e5`.
+
+The modem handshake is synthesized by NIRULOCK at run time (`src/modem.rs`);
+no recording is used. The dialled number 555-64789 is made up (555 is the
+exchange films use, 64789 spells NIRUX on a phone keypad).

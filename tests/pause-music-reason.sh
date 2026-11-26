@@ -246,6 +246,59 @@ case $played in
   *) echo "FAIL satie without the Gymnopedie played '$played'"; fails=$((fails + 1)) ;;
 esac
 
+# The bbs layout plays the modem handshake (a WAV file NIRULOCK writes in
+# the runtime directory) once before the pause music, under the same rules:
+# a manual lock plays both, an idle lock neither, and the file is removed.
+cat > "$T/bin/pw-play" <<EOF
+#!/bin/sh
+echo "\$\$" >> "$T/players"
+for f; do :; done
+echo "\$f" >> "$T/pw-files"
+case "\$f" in
+  *.wav) cp "\$f" "$T/intro.wav"; exec sleep 1 ;;
+esac
+exec sleep 120
+EOF
+chmod 755 "$T/bin/pw-play"
+for old in "${MUSIC:?}"/*; do [ -e "$old" ] && rm -f "$old"; done
+: > "$MUSIC/nirux-1-test-tune.ogg"
+printf 'layout = "bbs"\n' > "$XDG_CONFIG_HOME/niruui/lock.toml"
+bbs() {
+  rm -f "$T/players" "$T/pw-files" "$T/intro.wav"
+  "$BIN" --reason "$1" > "$T/lock.log" 2>&1 &
+  LOCK=$!
+  i=0
+  while [ "$i" -lt 90 ] && [ "$(cat "$T/pw-files" 2>/dev/null | wc -l)" -lt 2 ]; do
+    sleep 0.1; i=$((i + 1))
+  done
+  kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=""
+  i=0
+  while player_alive && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+}
+bbs manual
+first=$(sed -n 1p "$T/pw-files" 2>/dev/null || :)
+second=$(sed -n 2p "$T/pw-files" 2>/dev/null || :)
+case $first in
+  "$XDG_RUNTIME_DIR"/nirulock-intro-*.wav)
+    if [ "$(head -c 4 "$T/intro.wav")" = RIFF ] && [ ! -e "$first" ]; then
+      echo "OK   bbs plays the modem handshake first, and removes its file"
+    else
+      echo "FAIL the handshake file was not a WAV or was left behind"; fails=$((fails + 1))
+    fi ;;
+  *) echo "FAIL bbs did not play the handshake first: '$first'"; fails=$((fails + 1)) ;;
+esac
+if [ "$second" = "$MUSIC/nirux-1-test-tune.ogg" ]; then
+  echo "OK   bbs plays the pause music after the handshake"
+else
+  echo "FAIL bbs played '$second' after the handshake"; fails=$((fails + 1))
+fi
+bbs idle
+if [ -s "$T/pw-files" ]; then
+  echo "FAIL bbs played for an idle lock: $(cat "$T/pw-files")"; fails=$((fails + 1))
+else
+  echo "OK   bbs stays silent for an idle lock"
+fi
+
 if [ "$fails" -ne 0 ]; then
   echo "FAIL: $fails pause music reason checks failed"
   exit 1
