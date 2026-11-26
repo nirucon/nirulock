@@ -210,10 +210,43 @@ drawn and the loop sleeps until the next clock minute or a DPMS change.
 
 The scroller's text is built when the previous text has scrolled out: the
 date and time, the away time, the hostname with `show_hostname = true`, the
-tune's info line and the next quote. It is shown in NIRUSID's 8x8 font,
+next quote in quotation marks with its source, and the tune as its own
+segment, `NOW PLAYING  ARTIST - TITLE` (Vorbis comment `ARTIST` and `TITLE`
+tags, read from the first 64 KiB of an Ogg Vorbis, Opus or FLAC file, else
+the file name; a SID tune's author and title from its header), followed by
+the password hint, so the quote never reads as the tune's description. It
+is shown in NIRUSID's 8x8 font,
 upper case, with accents and Swedish letters reduced to their plain letters
 and characters the font lacks left out. With `visual = "auto"` the panel's
 audio detector starts CAVA while music plays; the demo reads the spectrum in
 its own frames and flashes when the bass jumps above its running average,
 fading in about a third of a second.
 
+## The attract layout (`layout = "attract"`)
+
+The game (`arcade.rs`) runs in fixed ticks, 25 a second, on a 320x200
+canvas of 16 palette indices (`chunky.rs`). It is fully determined by its
+seed: the lock takes a new seed from the clock at start, and every new game
+derives its own from it. The loop is title (8 s), high scores (7 s), the
+game until the last of three lives is lost, GAME OVER (4 s). The AI picks,
+every tick, one of fifteen moves by looking twelve ticks ahead at the
+bullets and the flying enemies (the wisps along their wave), plus a pull
+towards the lowest target or a power rune; now and then it has a short
+lapse and flies straight on, more often as the game gets harder (one level
+every 40 seconds), so every game ends. The high score table lives as long as
+the lock; a game that beats an entry is added as `NRX`.
+
+Each frame the canvas is compared row by row with the previous one; the rows
+that changed become runs of one colour, merged down the rows while they
+repeat, and are sent as at most 16 `PolyFillRectangle` requests (one per
+colour) per monitor into the backing pixmap, scaled by the whole number
+that fits (the playfield and the prompt lines together on the prompt
+monitor, the playfield alone, centred, on the others). Only the rows that
+changed are copied to the screen; the frame around the playfield is drawn
+when its colour changes (the warning colour after a failed attempt). The
+frame interval follows the demo layout's rule. The game time is the time
+between frames, at most 0.2 s at once, so a slow frame never makes the game
+jump, and with the display off nothing is drawn and the game waits. A typed
+key repaints the screen with the game as it is at that moment; it never
+changes the game. The music's beat (the same spectrum path as the demo)
+only changes how bright the explosions and the muzzle flash are drawn.

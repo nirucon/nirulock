@@ -185,3 +185,34 @@ else
 fi
 kill -0 "$LOCK" || fail "the lock exited"
 printf 'PASS: the demo animates frugally\n'
+
+# The attract layout without a sound server: the game plays itself at about
+# 25 frames a second, frugally, and with the display off it stops drawing.
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+printf 'layout = "attract"\n' > "$TEST/config/niruui/lock.toml"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-attract.log" 2>&1 & LOCK=$!
+sleep 3
+kill -0 "$LOCK" || { cat "$TEST/lock-attract.log"; exit 1; }
+attract_cpu=$(cpu "$LOCK" 6)
+attract_frames=$(frames)
+printf 'attract: nirulock %s%% CPU, %s distinct frames of 5\n' "$attract_cpu" "$attract_frames"
+# The title screen moves slowly at times: three of five is enough.
+[ "$attract_frames" -ge 3 ] || fail "the attract mode did not animate"
+awk -v c="$attract_cpu" 'BEGIN { exit !(c <= 5.0) }' || fail "attract CPU above 5%"
+if xset q 2>/dev/null | grep -q 'DPMS is' && xset dpms force off 2>/dev/null; then
+  sleep 3
+  off_cpu=$(cpu "$LOCK" 5)
+  off_frames=$(frames)
+  printf 'attract off: nirulock %s%% CPU, %s distinct frames of 5 with the display off\n' "$off_cpu" "$off_frames"
+  [ "$off_frames" -eq 1 ] || fail "the attract mode drew with the display off"
+  awk -v c="$off_cpu" 'BEGIN { exit !(c <= 0.3) }' || fail "attract CPU above 0.3% with the display off"
+  xset dpms force on 2>/dev/null || :
+  sleep 1.5
+  on_frames=$(frames)
+  [ "$on_frames" -ge 4 ] || fail "the attract mode did not resume with the display on"
+  printf 'PASS: the attract mode rests with the display off and resumes\n'
+else
+  printf 'attract off: skipped, this X server has no DPMS\n'
+fi
+kill -0 "$LOCK" || fail "the lock exited"
+printf 'PASS: the attract mode plays frugally\n'

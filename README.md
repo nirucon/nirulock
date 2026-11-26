@@ -28,7 +28,7 @@ unlocked screen.
   (`[SE] password:`) when more than one layout is configured.
 - Real XKB input via libxkbcommon (dead keys, AltGr, keypad, compose), loaded
   at run time with a built-in fallback.
-- Eight layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `cava`, `minimal`, `terminal`, `runic` and `corner`.
+- Nine layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `attract` (a C64 shoot 'em up that plays itself, like an arcade game's attract mode), `cava`, `minimal`, `terminal`, `runic` and `corner`.
 - `visual = "auto"`: CAVA spectrum only while music plays, otherwise rotating
   quotes; CAVA and audio monitoring stop completely with the display off.
 - Password-length hiding with `prompt_echo = "pulse"`.
@@ -132,6 +132,7 @@ Choose one with `layout`:
 | `ascii-cava` | Default. "NIRUX ascii": the NIRUX banner typed out slowly on every monitor with "A MINIMAL X11 DESKTOP" and a blinking block cursor under it; on the prompt monitor the CAVA spectrum (as wide as the banner) while music plays, then the clock, prompt and away time |
 | `ascii` | The same without the spectrum |
 | `demo` | A Commodore 64 demo on every monitor: a big chunky NIRUX logo wobbling over moving raster bars and a starfield, and a sine scroller along the bottom with the time, the away time, the tune and a quote; the clock, prompt and away time in the calm black middle of the prompt monitor |
+| `attract` | An arcade cabinet in attract mode: NIRUX RAID, an original C64 style shoot 'em up, plays itself in a framed playfield (title, high scores, a game, GAME OVER, again); the clock, prompt and away time on black below it |
 | `cava` | Large clock above the spectrum or a quote; lock state, away time and prompt below |
 | `minimal` | Centred clock, lock state, away time and prompt |
 | `terminal` | Left-aligned monospace screen with a `~$ lock` line |
@@ -186,11 +187,55 @@ frames a second to stay frugal. With the display off (DPMS) nothing is drawn
 at all. The other layouts stay as they were; `ascii-cava` is still the
 default.
 
+### The attract layout
+
+![The attract layout](docs/screenshots/attract.png)
+
+`layout = "attract"` makes the lock screen an arcade cabinet that nobody is
+playing. Like a Commodore 64 game left alone, it shows its title screen, the
+high score table and then a game that plays itself, until the last life is
+lost: GAME OVER, and round again with a new game.
+
+The game is NIRUX RAID, made for NIRULOCK (no existing game's name, look,
+characters or music): a vertical scrolling shoot 'em up over a river through
+a Norse forest, with runestones and the roots of Yggdrasil. A small rune
+craft flies it, steered by a simple AI that looks a few moments ahead,
+dodges bullets and wisps, lines up under its targets and picks up power
+runes (`P` widens the shot, `S` gives a shield). It fights will-o'-wisp
+formations, iron drones, rune towers on the banks and longships on the
+river, with explosions of particle debris, a score, lives and a high score.
+The AI is good but not perfect, so the games differ in length (one to a few
+minutes, sometimes more), and every game has its own seed.
+
+It is drawn like the real thing: a 320x200 picture with 16 colours in the
+NIRUSID 8x8 font, scaled up by a whole number (three times on a full HD
+screen) with sharp pixels, inside a frame. The colours come from the active
+NIRUX theme: the accent, two neighbours on the colour wheel for the river
+and the forest (turned from the warning colour when the accent is grey),
+the warning colour for bullets and fire, the text colour and greys from the
+muted colour, on black.
+
+The clock, the password prompt, the away time, the keyboard layout, Caps
+Lock and every failure message sit on plain black below the playfield in the
+theme font; the game never draws there. A failed attempt turns the frame to
+the warning colour while its message shows. Typing never reaches the game:
+it runs on its own clock and seed. While pause music plays, the tune shows
+in the bottom strip as `NOW PLAYING  ARTIST - TITLE` and explosions and the
+muzzle flash light up on the beat. Every monitor shows the same game (one
+game, drawn on each), centred; a screen too small for the playfield above
+the prompt shows the prompt only.
+
+It runs at 25 frames a second and draws only the rows of the picture that
+changed. In Xvfb at 1920x1080 the lock used about 1 % of one core (the X
+server 2 to 3 %) and about 10 MB of memory. Very large screens get fewer
+frames a second, and with the display off nothing is drawn and the game
+waits.
+
 ### Music or quotes
 
 `visual` decides what the `cava` and `ascii-cava` layouts show where the
 spectrum is drawn (in `demo`, `auto` means quotes in the scroller and the
-beat flash while music plays; `quotes` keeps the quotes and no flash,
+beat flash while music plays, in `attract` only the beat flash; `quotes` keeps the quotes and no flash,
 `music` or `cava` the flash without quotes, `none` neither):
 
 | Value | Shows |
@@ -259,7 +304,7 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
 [config.example.toml](config.example.toml).
 
 ```toml
-layout = "ascii-cava"      # ascii-cava, ascii, demo, cava, minimal, terminal, runic, corner
+layout = "ascii-cava"      # ascii-cava, ascii, demo, attract, cava, minimal, terminal, runic, corner
 visualizer = true
 visual = "auto"            # auto, music, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns

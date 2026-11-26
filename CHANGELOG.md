@@ -3,6 +3,38 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.31.0 (2026-11-26)
+
+### Added
+
+- **`layout = "attract"`, an arcade cabinet in attract mode.** NIRUX RAID,
+  an original C64 style vertical scrolling shoot 'em up made for NIRULOCK,
+  plays itself: a rune craft flown by a small AI that looks a few moments
+  ahead (dodging bullets and wisps, lining up under targets, picking up
+  power runes for a wider shot or a shield) flies up a river through a
+  Norse forest with runestones and the roots of Yggdrasil, against
+  will-o'-wisp formations, iron drones, rune towers and longships, with
+  particle explosions, a score, three lives and a high score. Like a C64
+  game left alone it cycles title screen (raster bars behind the logo),
+  HALL OF HEROES high score table, a game until GAME OVER, and round again
+  with a new seed; a game that makes the table is added to it for the rest
+  of the lock.
+- A 320x200 picture with 16 colours derived from the active theme (the
+  accent, a neighbour of it on the colour wheel for the river and one for
+  the forest, from the warning colour when the accent is grey, the warning
+  colour, the text colour and greys), in NIRUSID's 8x8 font, scaled by a
+  whole number with sharp pixels inside a frame. The clock, prompt, away
+  time, keyboard layout, Caps Lock and failure messages stay on plain black
+  below it; a failed attempt turns the frame to the warning colour. Typing
+  never reaches the game. While pause music plays, the bottom strip shows
+  `NOW PLAYING  ARTIST - TITLE` and explosions flash on the beat. Every
+  monitor shows the same game.
+- Frugal: only the rows of the picture that changed are drawn, as merged
+  rectangles, at 25 frames a second (fewer on very large screens), and
+  nothing with the display off. In Xvfb at 1920x1080 the lock used about
+  1 % of one core and 10 MB of memory.
+- `tests/resource-check.sh` checks the attract layout's frame rate and CPU.
+
 ## 0.30.1 (2026-11-26)
 
 ### Fixed

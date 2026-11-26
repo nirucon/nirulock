@@ -767,19 +767,19 @@ fn join(r: f32, g: f32, b: f32) -> u32 {
     (c(r) << 16) | (c(g) << 8) | c(b)
 }
 
-fn mix(a: u32, b: u32, t: f32) -> u32 {
+pub(crate) fn mix(a: u32, b: u32, t: f32) -> u32 {
     let t = t.clamp(0.0, 1.0);
     let (ar, ag, ab) = split(a);
     let (br, bg, bb) = split(b);
     join(ar + (br - ar) * t, ag + (bg - ag) * t, ab + (bb - ab) * t)
 }
 
-fn lighten(colour: u32, t: f32) -> u32 {
+pub(crate) fn lighten(colour: u32, t: f32) -> u32 {
     mix(colour, 0xffffff, t)
 }
 
 /// Towards black by `1 - level`.
-fn shade(colour: u32, level: f32) -> u32 {
+pub(crate) fn shade(colour: u32, level: f32) -> u32 {
     mix(0x000000, colour, level)
 }
 

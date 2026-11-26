@@ -12,11 +12,16 @@ font_size = 22.0
 # raster bars and stars, and a sine scroller with the time, the tune and a
 # quote along the bottom; the bars and logo flash on the beat while music
 # plays. The clock and the prompt stay in the calm black middle.
+# attract: an arcade cabinet in attract mode: NIRUX RAID, an original C64
+# style shoot 'em up, plays itself in a framed 320x200 playfield (title,
+# high scores, a game, GAME OVER, again); the tune shows as ARTIST - TITLE
+# and explosions flash on the beat. The prompt stays on black below it.
 # cava: a large clock above the spectrum or a quote.
 layout = "ascii-cava"
 visualizer = true
 # What the cava and ascii-cava layouts show where the spectrum is drawn
-# (demo: "auto" means quotes in the scroller and the beat flash):
+# (demo: "auto" means quotes in the scroller and the beat flash; attract:
+# the beat flash only):
 #   "auto"   the CAVA spectrum only while music or radio plays, otherwise a
 #            quote from ~/.config/niru/quotes/ in cava, nothing in ascii-cava
 #            (the default)

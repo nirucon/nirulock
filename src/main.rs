@@ -12,9 +12,12 @@
 //!   3. PAM decides; a missing PAM, a failed conversation or an unexpected
 //!      prompt all fail closed.
 
+mod arcade;
 mod ascii;
+mod attract;
 mod audio;
 mod cava;
+mod chunky;
 mod config;
 mod core;
 mod demo;
@@ -217,6 +220,7 @@ struct Lock {
     ascii: ascii::State,
     /// The `demo` layout's scene.
     demo: demo::State,
+    attract: attract::State,
     spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
@@ -346,6 +350,7 @@ impl Lock {
             outputs: Vec::new(),
             ascii: ascii::State::default(),
             demo: demo::State::default(),
+            attract: attract::State::default(),
             spectrum_rect: None,
             ready: false,
             caps,
@@ -1053,9 +1058,16 @@ impl Lock {
                     row += spots.step;
                 }
             }
-            config::Layout::Demo => {
-                let spots = self.demo_layout(area);
-                self.demo_paint()?;
+            config::Layout::Demo | config::Layout::Attract => {
+                let spots = if self.cfg.layout == config::Layout::Demo {
+                    let spots = self.demo_layout(area);
+                    self.demo_paint()?;
+                    spots
+                } else {
+                    let spots = self.attract_layout(area);
+                    self.attract_paint(true)?;
+                    spots
+                };
                 ascii_info = Some(spots.info);
                 self.clock_renderer.draw_centred(
                     &self.surface.c,
@@ -1177,9 +1189,10 @@ impl Lock {
                     None,
                     layout::clamp16(cava_layout.as_ref().and_then(|l| l.info).unwrap_or(0)),
                 ),
-                config::Layout::Ascii | config::Layout::AsciiCava | config::Layout::Demo => {
-                    (None, ascii_info.unwrap_or(mid - line * 3))
-                }
+                config::Layout::Ascii
+                | config::Layout::AsciiCava
+                | config::Layout::Demo
+                | config::Layout::Attract => (None, ascii_info.unwrap_or(mid - line * 3)),
             };
             let (x, baseline) = match at {
                 (Some(x), baseline) => (x, baseline),
@@ -1545,10 +1558,17 @@ impl Lock {
                 if let Err(e) = self.demo_tick(display_on) {
                     eprintln!("nirulock: demo: {e}");
                 }
+            } else if self.cfg.layout == config::Layout::Attract {
+                if let Err(e) = self.attract_tick(display_on) {
+                    eprintln!("nirulock: attract: {e}");
+                }
             }
             // The demo has no panel to paint: it reads the spectrum in its
             // own frames.
-            let demo = self.cfg.layout == config::Layout::Demo;
+            let demo = matches!(
+                self.cfg.layout,
+                config::Layout::Demo | config::Layout::Attract
+            );
             if !repaint && !demo && (frame_due || panel_dirty) {
                 if let Err(e) = self.draw_cava_frame() {
                     eprintln!("nirulock: cava repaint: {e}");
@@ -1748,6 +1768,9 @@ impl Lock {
             ms = ms.min(next.as_millis() as u64);
         }
         if let Some(next) = self.demo_timeout(display_on) {
+            ms = ms.min(next.as_millis() as u64);
+        }
+        if let Some(next) = self.attract_timeout(display_on) {
             ms = ms.min(next.as_millis() as u64);
         }
         // A few milliseconds late is better than waking just before a boundary.
