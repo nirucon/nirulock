@@ -55,3 +55,15 @@ which gives 8,710 bytes with SHA-256
 The modem handshake is synthesized by NIRULOCK at run time (`src/modem.rs`);
 no recording is used. The dialled number 555-64789 is made up (555 is the
 exchange films use, 64789 spells NIRUX on a phone keypad).
+
+## The NIRUX intrusion console (`layout = "hacker"`)
+
+Everything in it is original work made for NIRULOCK, MIT like this program,
+and drawn by code at run time (`src/hacker.rs`): the boot text, the panes,
+the wire-frame globe and the mesh, the dot-matrix clock and the analyser.
+It is a homage to the look of hacker films and cyberpunk fiction in
+general; no logo, name, screen or text of any film or book is used or
+recreated. The nodes are Norse names (the nine realms, Yggdrasil and
+Bifrost), and all memory, traffic, routes and round trip times are made up
+from a random seed; nothing is read from the network or the system. The
+characters are NIRUSID's 8x8 font as in the `bbs` layout.

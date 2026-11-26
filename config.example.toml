@@ -2,7 +2,7 @@
 # font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 font_size = 22.0
 
-# ascii-cava | ascii | demo | attract | satie | bbs | cava | minimal | terminal | runic | corner
+# ascii-cava | ascii | demo | attract | satie | bbs | hacker | cava | minimal | terminal | runic | corner
 # ascii-cava (the default, "NIRUX ascii"): the NIRUX banner typed out slowly
 # on every screen like an old terminal, "A MINIMAL X11 DESKTOP" and a blinking
 # cursor under it, in the theme's accent colour; the CAVA spectrum, as wide as
@@ -24,12 +24,19 @@ font_size = 22.0
 # the message of the day, the tune), with a LOGIN:/PASSWORD: prompt; the
 # pause music starts with a SID style modem handshake. [motion] reduced in
 # ~/.config/niruwm/appearance.toml shows the board at once.
+# hacker: the NIRUX intrusion console, a retro hacker's terminal: it boots
+# (ICE, handshake, trace, hex dump, progress bars) and settles into panes
+# (hex dump, a trace over a wire-frame globe of the nine realms, a packet
+# sniffer, a dot-matrix clock, a quote, a signal that follows the music)
+# with an ENTER PASSPHRASE: prompt, all in the theme's accent. [motion]
+# reduced keeps it still.
 # cava: a large clock above the spectrum or a quote.
 layout = "ascii-cava"
 visualizer = true
 # What the cava and ascii-cava layouts show where the spectrum is drawn
 # (demo: "auto" means quotes in the scroller and the beat flash; attract and
-# satie: the beat flash only; bbs: the message of the day and the RD light):
+# satie: the beat flash only; bbs: the message of the day and the RD light;
+# hacker: the message of the day and the analyser):
 #   "auto"   the CAVA spectrum only while music or radio plays, otherwise a
 #            quote from ~/.config/niru/quotes/ in cava, nothing in ascii-cava
 #            (the default)

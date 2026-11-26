@@ -28,6 +28,8 @@ pub enum Layout {
     Satie,
     /// NIRUX BBS: a dial-up bulletin board in ANSI art.
     Bbs,
+    /// The NIRUX intrusion console: a retro hacker's terminal.
+    Hacker,
 }
 
 impl Layout {
@@ -42,7 +44,13 @@ impl Layout {
     pub fn has_panel(self) -> bool {
         matches!(
             self,
-            Self::Cava | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie | Self::Bbs
+            Self::Cava
+                | Self::AsciiCava
+                | Self::Demo
+                | Self::Attract
+                | Self::Satie
+                | Self::Bbs
+                | Self::Hacker
         )
     }
 
@@ -50,7 +58,13 @@ impl Layout {
     pub fn animates(self) -> bool {
         matches!(
             self,
-            Self::Ascii | Self::AsciiCava | Self::Demo | Self::Attract | Self::Satie | Self::Bbs
+            Self::Ascii
+                | Self::AsciiCava
+                | Self::Demo
+                | Self::Attract
+                | Self::Satie
+                | Self::Bbs
+                | Self::Hacker
         )
     }
 
@@ -67,6 +81,7 @@ impl Layout {
             "attract" => Some(Self::Attract),
             "satie" => Some(Self::Satie),
             "bbs" => Some(Self::Bbs),
+            "hacker" => Some(Self::Hacker),
             _ => None,
         }
     }
@@ -84,6 +99,7 @@ impl Layout {
             Self::Attract => "attract",
             Self::Satie => "satie",
             Self::Bbs => "bbs",
+            Self::Hacker => "hacker",
         }
     }
 }
@@ -419,7 +435,7 @@ impl Config {
         }
         if let Some(layout) = v.get("layout").and_then(|x| x.as_str()) {
             cfg.layout = Layout::parse(layout).ok_or_else(|| {
-                "layout must be ascii-cava, ascii, demo, attract, satie, bbs, cava, minimal, terminal, runic or corner"
+                "layout must be ascii-cava, ascii, demo, attract, satie, bbs, hacker, cava, minimal, terminal, runic or corner"
                     .to_string()
             })?;
         }
@@ -647,6 +663,10 @@ mod tests {
         assert_eq!(Layout::Bbs.as_str(), "bbs");
         assert!(Layout::Bbs.animates() && Layout::Bbs.has_panel());
         assert!(!Layout::Bbs.is_ascii());
+        assert_eq!(Layout::parse("Hacker"), Some(Layout::Hacker));
+        assert_eq!(Layout::Hacker.as_str(), "hacker");
+        assert!(Layout::Hacker.animates() && Layout::Hacker.has_panel());
+        assert!(!Layout::Hacker.is_ascii());
         assert!(Layout::parse("noir-ish").is_none());
         // The default stays NIRUX ascii; demo is chosen in lock.toml.
         let c = |text: &str| Config::from_value(&text.parse().unwrap());
@@ -664,7 +684,8 @@ mod tests {
             err.contains("demo")
                 && err.contains("attract")
                 && err.contains("satie")
-                && err.contains("bbs"),
+                && err.contains("bbs")
+                && err.contains("hacker"),
             "{err}"
         );
     }

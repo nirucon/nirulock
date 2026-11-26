@@ -28,7 +28,7 @@ unlocked screen.
   (`[SE] password:`) when more than one layout is configured.
 - Real XKB input via libxkbcommon (dead keys, AltGr, keypad, compose), loaded
   at run time with a built-in fallback.
-- Eleven layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `attract` (a C64 shoot 'em up that plays itself, like an arcade game's attract mode), `satie` (a C64 loading screen of Erik Satie, with his Gymnopedie), `bbs` (NIRUX BBS, a dial-up bulletin board in ANSI art, with a modem handshake), `cava`, `minimal`, `terminal`, `runic` and `corner`.
+- Twelve layouts: `ascii-cava` (default, "NIRUX ascii" with the spectrum), `ascii`, `demo` (a C64 demo: chunky pixel logo, raster bars, sine scroller), `attract` (a C64 shoot 'em up that plays itself, like an arcade game's attract mode), `satie` (a C64 loading screen of Erik Satie, with his Gymnopedie), `bbs` (NIRUX BBS, a dial-up bulletin board in ANSI art, with a modem handshake), `hacker` (the NIRUX intrusion console, a retro hacker's terminal left running), `cava`, `minimal`, `terminal`, `runic` and `corner`.
 - `visual = "auto"`: CAVA spectrum only while music plays, otherwise rotating
   quotes; CAVA and audio monitoring stop completely with the display off.
 - Password-length hiding with `prompt_echo = "pulse"`.
@@ -135,6 +135,7 @@ Choose one with `layout`:
 | `attract` | An arcade cabinet in attract mode: NIRUX RAID, an original C64 style shoot 'em up, plays itself in a framed playfield (title, high scores, a game, GAME OVER, again); the clock, prompt and away time on black below it |
 | `satie` | A C64 tape loading screen: a portrait of Erik Satie loads cell by cell while loader stripes flicker in the border, then rests; NIRUX's Gymnopedie No. 1 plays as the pause music when installed; the prompt on black below |
 | `bbs` | NIRUX BBS: the modem dials a bulletin board and its ANSI screen arrives at 14400 bps: an ANSI Yggdrasil, the NIRUX logo, the system box, a quote as the message of the day, the tune, and a `LOGIN:` and `PASSWORD:` prompt; a SID style modem handshake starts the pause music |
+| `hacker` | The NIRUX intrusion console, a hacker's terminal of the films left running: it boots fast (ICE, handshake, trace, hex dump, progress bars), then settles into panes: a hex dump, a trace across a wire-frame globe of the nine realms, a packet sniffer, a dot-matrix clock, a quote as the intercepted message of the day, a signal that follows the music, and `ENTER PASSPHRASE:`; ACCESS DENIED flashes with a glitch |
 | `cava` | Large clock above the spectrum or a quote; lock state, away time and prompt below |
 | `minimal` | Centred clock, lock state, away time and prompt |
 | `terminal` | Left-aligned monospace screen with a `~$ lock` line |
@@ -341,11 +342,74 @@ of memory. With the display off nothing is drawn. The text screen is shown
 at the largest whole scale that fits each monitor (twice at 1920x1080), on
 every monitor.
 
+### The hacker layout
+
+![The hacker layout](docs/screenshots/hacker.png)
+
+`layout = "hacker"` is the NIRUX intrusion console, a hacker's terminal in
+the style of the 1980s and 90s films and cyberpunk novels that has been
+left running. It is a 100x31 text screen. When the screen locks, the
+console boots in about five seconds: the banner, `[ OK ]` lines for the ICE
+breaker, the keyring and the cloak, a handshake with BIFROST/7, a deep
+trace, a burst of hex dump and two progress bars (`DECRYPTING`,
+`UPLINK`), then `PASSPHRASE REQUIRED.` Its panes open one after the other:
+
+- MEMORY: a hex dump that scrolls a line a second, with a scan cursor on
+  the newest line;
+- TRACE: a wire-frame globe turning slowly, a mesh of the nine realms and
+  the bridges between them (YGGDRASIL, ASGARD, BIFROST, MIDGARD and the
+  others), and a trace that runs along the mesh hop by hop, with its hop
+  table and round trip times;
+- PACKET SNIFFER: made-up traffic between the realms (time, source and
+  destination with a port, protocol, length, flags);
+- CLOCK: the time in dot-matrix digits with a blinking colon, the date and
+  how long the console has been sealed;
+- INTERCEPT: the message of the day, a quote from the `quotes`
+  collections with its source on the frame;
+- SIGNAL: a calm carrier wave, or while pause music plays a spectrum
+  analyser that brightens on the beat, and `NOW PLAYING  ARTIST - TITLE`
+  (only the artist and the title);
+- AUTHENTICATION: `ENTER PASSPHRASE:` with a block cursor, the failed
+  attempts, and the line under it.
+
+The top line names the console, the link, the date and the time; the
+bottom line shows ICE ACTIVE, the keyboard layout (when more than one is
+configured), Caps Lock, the link, the time sealed, and TX and RX lights
+(TX after a key, RX for a packet or the beat).
+
+Everything on the screen is made up: the names are Norse, there are no
+addresses, no places and no real hosts, and no user or host name is shown.
+The password entry honours `prompt_echo`. A failed attempt flashes
+`ACCESS DENIED` in big letters in the warning colour, with a short glitch
+(rows slip, noise blocks), and says `ACCESS DENIED: INVALID PASSPHRASE`
+under the prompt; PAM's own message (a faillock lockout),
+`VERIFYING PASSPHRASE...`, `CAPS LOCK IS ON` and the failed attempts show
+there too. Typing skips the boot. A new quote comes every five minutes,
+unless someone typed in the last minute.
+
+All colours come from the active NIRUX theme, as in `bbs`: the console is
+drawn in the accent in three shades, so a green theme gives green phosphor,
+niru-satie sepia, niru-nord ice and niru-noir grey; the addresses and labels
+use the accent's cool neighbour and ACCESS DENIED the warning colour. At
+twice the size and more, every second screen line is a little darker, like
+a CRT's scanlines. With `[motion] reduced = true` in the NIRUX appearance
+contract the console shows at once and keeps still: no boot, no glitch, no
+scanlines, and only the clock changes. The layout has no sound of its own:
+the pause music plays as usual (by default only for a manual lock).
+
+Only what changes is drawn: the cells that differ, the pixel panes when
+their picture changes, and only those parts of the screen are sent. At
+rest it wakes four times a second. In Xvfb at 1920x1080 the lock used about
+1 % of one core while booting, 0.25 to 0.45 % at rest (about 0.3 % over a
+minute), nothing with reduced motion, and about 10 MB of memory. With the
+display off nothing is drawn. The text screen is shown at the largest whole
+scale that fits each monitor (twice at 1920x1080), on every monitor.
+
 ### Music or quotes
 
 `visual` decides what the `cava` and `ascii-cava` layouts show where the
 spectrum is drawn (in `demo`, `auto` means quotes in the scroller and the
-beat flash while music plays, in `attract` and `satie` only the beat flash, in `bbs` the message of the day and the RD light on the beat; `quotes` keeps the quotes and no flash,
+beat flash while music plays, in `attract` and `satie` only the beat flash, in `bbs` the message of the day and the RD light on the beat, in `hacker` the message of the day and the analyser; `quotes` keeps the quotes and no flash,
 `music` or `cava` the flash without quotes, `none` neither):
 
 | Value | Shows |
@@ -414,7 +478,7 @@ Settings live in `~/.config/niruui/lock.toml` (XDG respected); see
 [config.example.toml](config.example.toml).
 
 ```toml
-layout = "ascii-cava"      # ascii-cava, ascii, demo, attract, satie, bbs, cava, minimal, terminal, runic, corner
+layout = "ascii-cava"      # ascii-cava, ascii, demo, attract, satie, bbs, hacker, cava, minimal, terminal, runic, corner
 visualizer = true
 visual = "auto"            # auto, music, cava, quotes, none
 quotes = ["*"]             # collections by name; * and ? patterns

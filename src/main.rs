@@ -23,6 +23,7 @@ mod config;
 mod core;
 mod demo;
 mod display;
+mod hacker;
 mod keyboard;
 mod layout;
 mod modem;
@@ -226,6 +227,7 @@ struct Lock {
     attract: attract::State,
     satie: satie::State,
     bbs: bbs::State,
+    hacker: hacker::State,
     spectrum_rect: Option<(i16, i16, u16, u16)>,
     ready: bool,
     caps: bool,
@@ -364,6 +366,7 @@ impl Lock {
             attract: attract::State::default(),
             satie: satie::State::default(),
             bbs: bbs::State::default(),
+            hacker: hacker::State::default(),
             spectrum_rect: None,
             ready: false,
             caps,
@@ -705,6 +708,11 @@ impl Lock {
             // The board draws the prompt and everything else itself.
             self.spectrum_rect = None;
             return self.bbs_draw();
+        }
+        if self.cfg.layout == config::Layout::Hacker {
+            // The console draws the prompt and everything else itself.
+            self.spectrum_rect = None;
+            return self.hacker_draw();
         }
         let pal = self.cfg.palette.clone();
         self.surface.clear(pal.background)?;
@@ -1077,7 +1085,7 @@ impl Lock {
                 }
             }
             // Drawn by `bbs_draw` before any of this.
-            config::Layout::Bbs => {}
+            config::Layout::Bbs | config::Layout::Hacker => {}
             config::Layout::Demo | config::Layout::Attract | config::Layout::Satie => {
                 let spots = match self.cfg.layout {
                     config::Layout::Demo => {
@@ -1222,7 +1230,8 @@ impl Lock {
                 | config::Layout::Demo
                 | config::Layout::Attract
                 | config::Layout::Satie
-                | config::Layout::Bbs => (None, ascii_info.unwrap_or(mid - line * 3)),
+                | config::Layout::Bbs
+                | config::Layout::Hacker => (None, ascii_info.unwrap_or(mid - line * 3)),
             };
             let (x, baseline) = match at {
                 (Some(x), baseline) => (x, baseline),
@@ -1458,6 +1467,9 @@ impl Lock {
         if self.cfg.layout == config::Layout::Bbs {
             self.bbs.key(Instant::now());
         }
+        if self.cfg.layout == config::Layout::Hacker {
+            self.hacker.key(Instant::now());
+        }
         self.draw()?;
         Ok(true)
     }
@@ -1603,6 +1615,10 @@ impl Lock {
                 if let Err(e) = self.bbs_tick(display_on) {
                     eprintln!("nirulock: bbs: {e}");
                 }
+            } else if self.cfg.layout == config::Layout::Hacker {
+                if let Err(e) = self.hacker_tick(display_on) {
+                    eprintln!("nirulock: hacker: {e}");
+                }
             }
             // The demo has no panel to paint: it reads the spectrum in its
             // own frames.
@@ -1612,6 +1628,7 @@ impl Lock {
                     | config::Layout::Attract
                     | config::Layout::Satie
                     | config::Layout::Bbs
+                    | config::Layout::Hacker
             );
             if !repaint && !demo && (frame_due || panel_dirty) {
                 if let Err(e) = self.draw_cava_frame() {
@@ -1821,6 +1838,9 @@ impl Lock {
             ms = ms.min(next.as_millis() as u64);
         }
         if let Some(next) = self.bbs_timeout(display_on) {
+            ms = ms.min(next.as_millis() as u64);
+        }
+        if let Some(next) = self.hacker_timeout(display_on) {
             ms = ms.min(next.as_millis() as u64);
         }
         // A few milliseconds late is better than waking just before a boundary.

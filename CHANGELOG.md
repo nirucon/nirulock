@@ -3,6 +3,53 @@
 Releases before 0.22.0 are described in their GitHub release notes and the
 git history.
 
+## 0.34.0 (unreleased)
+
+### Added
+
+- **`layout = "hacker"`, the NIRUX intrusion console: a hacker's terminal
+  of the 1980s and 90s films and cyberpunk fiction, left running.** A
+  100x31 text screen. On lock it boots fast: the banner, `[ OK ]` lines for
+  the ICE breaker, the keyring and the cloak, a handshake with BIFROST/7, a
+  deep trace, a burst of hex dump and the `DECRYPTING` and `UPLINK`
+  progress bars, then `PASSPHRASE REQUIRED.` Its panes open one by one and
+  it settles into a calm, animated console: MEMORY (a scrolling hex dump
+  with a scan cursor), TRACE (a slowly turning wire-frame globe with a mesh
+  of the nine realms and a trace that runs hop by hop, with its hop table),
+  PACKET SNIFFER (made-up traffic between the realms), CLOCK (dot-matrix
+  digits, the date and the time sealed), INTERCEPT (a quote from the
+  `quotes` collections as the message of the day), SIGNAL (a carrier wave,
+  or an analyser that follows the pause music and brightens on the beat,
+  with `NOW PLAYING  ARTIST - TITLE`) and AUTHENTICATION
+  (`ENTER PASSPHRASE:`). A title bar and a status bar (ICE ACTIVE, the
+  keyboard layout, Caps Lock, the link, the time sealed, TX and RX lights)
+  frame it.
+- The password entry honours `prompt_echo` with a blinking block cursor; a
+  failed attempt flashes `ACCESS DENIED` in big letters in the warning
+  colour with a short glitch (slipping rows, noise blocks, an inverted
+  flash), and `ACCESS DENIED: INVALID PASSPHRASE`, PAM's messages,
+  `CAPS LOCK IS ON` and the failed attempts show under the prompt. Grabs,
+  PAM, multi-monitor (every monitor shows the console), display off and
+  DPMS work as in every layout. Nothing private is shown: only Norse node
+  names, no addresses, places, user or host names. Typing skips the boot.
+- Theme colours throughout, mapped like `bbs`: the console is drawn in the
+  accent, so a green theme gives green phosphor, niru-satie sepia,
+  niru-nord ice and niru-noir grey. At twice the size and more every second
+  screen line is darker, like a CRT's scanlines. `[motion] reduced` shows
+  the console at once and keeps it still (no boot, glitch or scanlines;
+  only the clock changes). No sound of its own: the pause music plays under
+  its usual rules.
+- Frugal: only changed cells, changed pixel panes and the changed parts of
+  the screen are drawn and sent, four times a second at rest. In Xvfb at
+  1920x1080 the lock used about 1 % of one core while booting, about 0.3 %
+  at rest, 0 % with reduced motion, and about 10 MB of memory.
+  `tests/resource-check.sh` and `tests/pause-music-reason.sh` cover it.
+
+### Changed
+
+- `bbs` shares its text screen with the new layout: grids of any size,
+  messages of the day for any box, and a faster path for plain ASCII text.
+
 ## 0.33.0 (2026-11-26)
 
 ### Added

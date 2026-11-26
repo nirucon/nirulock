@@ -349,3 +349,92 @@ every tune (its own session, no terminal, killed with the lock, excluded
 from "other audio"), removes it, and goes on with the pause music. Esc,
 suspend and the display going off stop it like the music. Without an audio
 player, or when the file cannot be written, the music starts without it.
+
+## The hacker layout (`layout = "hacker"`)
+
+The screen is 100 columns by 31 rows of 8x16 character cells (an 800x496
+canvas), shown at the largest whole scale that fits each monitor, centred,
+on every monitor; the prompt is part of it. Characters are drawn as in
+`bbs`: block, shade and box characters from fixed pixel patterns, printable
+ASCII in NIRUSID's 8x8 font with every row doubled, in capitals.
+
+**Boot** (`hacker::Phase::Boot`, 5.3 seconds from the lock): the banner
+with the version, a copyright line, `> BOOT --SILENT /DEV/ICE0` typed at 28
+ms a character, three `[ OK ]` lines, `> HANDSHAKE BIFROST/7`, the SYN and
+cipher lines, `> TRACE YGGDRASIL --DEEP`, ten hex dump lines at 55 ms each,
+`DECRYPTING` (0.7 s) and `UPLINK` (0.4 s) progress bars of 30 cells,
+`LINK ESTABLISHED. CONSOLE SEALED, OPERATOR AWAY.` and
+`PASSPHRASE REQUIRED.`, with a blinking block cursor. A key that reaches
+the lock, a check or a failed attempt skips to the open console; reduced
+motion never shows the boot.
+
+**Console** (`hacker::Phase::Console`): the title bar, then the panes open
+90 ms apart (MEMORY, TRACE, SNIFFER, CLOCK, INTERCEPT, SIGNAL,
+AUTHENTICATION), with the status bar at once. All made-up data comes from a
+per-lock random seed through a hash, so a moment is always drawn the same:
+
+- MEMORY: ten lines of eight bytes; the dump moves up a line every second;
+  one line in four holds a Norse word, one in eight trails off in zeros; a
+  scan cursor steps across the newest line every 0.25 s.
+- TRACE: a globe of radius 72 canvas pixels tilted 22 degrees, parallels
+  every 30 degrees and twelve meridians turning 4 degrees a second in
+  one-second steps, the far side faint; eleven nodes (YGGDRASIL, ASGARD,
+  ALFHEIM, VANAHEIM, BIFROST, MIDGARD, JOTUNHEIM, NIDAVELLIR, NIFLHEIM,
+  MUSPELHEIM, HEL) and 19 links. Every 12 seconds a new route of four to six
+  nodes along the links (never one twice) is traced, a hop each 1.2
+  seconds; the table lists the hops with made-up round trip times, then
+  TRACE COMPLETE and the last node blinks in a ring.
+- PACKET SNIFFER: one in three half-second slots carries a packet; the
+  newest five are listed with the time of day, source and destination
+  (node and port), protocol (TCP, UDP, TLS, DNS, ICMP), length and flags;
+  a line is bright for its first second.
+- CLOCK: the time in the 8x8 font as dots of 3x3 pixels on a 4 pixel
+  pitch, the colon blinking each second; the date and SEALED with the time
+  since the lock.
+- INTERCEPT: up to four lines of 58 columns from the `quotes` collections
+  (a cut quote ends in `...`), the source on the frame (a parenthesis the
+  quotes reader cut off is dropped); a short NIRUX text without quotes. A
+  new quote every five minutes of the console, unless a key came in the
+  last minute or the entry is not empty.
+- SIGNAL: without music a carrier sine under a slow envelope that moves in
+  steps of 0.25 s; while pause music plays (the CAVA spectrum, as in
+  `demo`) an analyser of bars of 2 pixel segments, brighter while the beat
+  flash is lit; `NOW PLAYING  ARTIST - TITLE` on its last line, or the tune
+  alone with NOW PLAYING in the pane's title when it does not fit.
+- AUTHENTICATION: `ENTER PASSPHRASE:` and the entry as `prompt_echo` shows
+  it with a block cursor blinking each 0.5 s (hidden while checking),
+  `N FAILED ATTEMPTS` on the right, and one line of messages:
+  `VERIFYING PASSPHRASE...`, `ACCESS DENIED: <reason>` (INVALID PASSPHRASE
+  for a wrong password, otherwise PAM's message or the error), PAM's
+  message while prompting, `CAPS LOCK IS ON`, or a calm default.
+
+While the attempt shows as failed (`State::Wrong`, two seconds), a double
+frame in the warning colour covers the middle with ACCESS DENIED at three
+times the font size, the reason and `ATTEMPT N LOGGED`; the prompt's frame
+and label turn to the warning colour. In its first 0.45 s the frame flashes
+inverted every 80 ms, five rows slip up to four columns sideways, 40 cells
+turn to noise blocks and the big letters jitter, a new pattern every 40 ms;
+with reduced motion the box shows without any of it.
+
+The 16 ANSI colours map to the theme palette as in `bbs`; the console uses
+brown (the accent dark) for frames and quiet text and as the bars'
+background, light blue (the accent) for its text, yellow (the accent
+light) for titles and what is new, cyan and light cyan (the cool
+neighbour) for addresses and labels, red and light red (the warning colour
+and its flash) for ACCESS DENIED and Caps Lock, and white. The pixel panes
+use the same palette slots directly. At a scale of two and more the last
+screen line of every canvas row uses the palette at 70 % (scanlines),
+except with reduced motion.
+
+Each frame the cells that differ from the last are drawn into the canvas;
+the globe, the clock and the signal are drawn again only when their
+picture changes (and after a full redraw); the ACCESS DENIED box is drawn
+last. The canvas is compared with what the screen shows, and for each row
+of cells the runs of changed cell columns (gaps under four cells joined,
+the same runs on the next row merged) are sent with PutImage (at most 200
+KB a request) and copied to the window with one flush. While booting,
+opening the panes and glitching the console wakes every 40 ms, while pause
+music plays every 80 ms, otherwise on the next quarter second, and for the
+TX light 150 ms after a key. With reduced motion it wakes only at the next
+minute for the clock. With the display off nothing is drawn. The layout
+plays no sound of its own; the pause music follows its usual rules.

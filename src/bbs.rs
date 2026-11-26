@@ -157,28 +157,42 @@ pub const BLANK: Cell = Cell {
     bg: ansi::BLACK,
 };
 
-/// The screen's cells, row by row.
+/// A text screen's cells, row by row (the board's 80x30 by default; the
+/// `hacker` layout's console is wider).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Grid(pub Vec<Cell>);
+pub struct Grid {
+    pub cols: usize,
+    pub rows: usize,
+    pub cells: Vec<Cell>,
+}
 
 impl Default for Grid {
     fn default() -> Self {
-        Self(vec![BLANK; COLS * ROWS])
+        Self::new(COLS, ROWS)
     }
 }
 
 impl Grid {
+    /// A blank screen of `cols` by `rows` cells.
+    pub fn new(cols: usize, rows: usize) -> Self {
+        Self {
+            cols,
+            rows,
+            cells: vec![BLANK; cols * rows],
+        }
+    }
+
     pub fn get(&self, col: usize, row: usize) -> Cell {
-        if col < COLS && row < ROWS {
-            self.0[row * COLS + col]
+        if col < self.cols && row < self.rows {
+            self.cells[row * self.cols + col]
         } else {
             BLANK
         }
     }
 
     pub fn set(&mut self, col: usize, row: usize, cell: Cell) {
-        if col < COLS && row < ROWS {
-            self.0[row * COLS + col] = cell;
+        if col < self.cols && row < self.rows {
+            self.cells[row * self.cols + col] = cell;
         }
     }
 
@@ -207,7 +221,7 @@ impl Grid {
     /// tests.
     #[cfg(test)]
     pub fn row_text(&self, row: usize) -> String {
-        (0..COLS)
+        (0..self.cols)
             .map(|c| {
                 let ch = self.get(c, row).ch;
                 if (0x20..0x7f).contains(&ch) {
@@ -222,12 +236,18 @@ impl Grid {
 
 /// CP437 codes for `text`, in capitals.
 pub fn codes(text: &str) -> Vec<u8> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(text.len());
     for c in text.chars() {
+        // The common case without allocating: printable ASCII.
+        if (' '..='~').contains(&c) {
+            out.push(c.to_ascii_uppercase() as u8);
+            continue;
+        }
         let code = match c {
             '♪' => Some(0x0d),
             '♫' => Some(0x0e),
             '·' => Some(0xfa),
+            '■' => Some(0xfe),
             '░' => Some(0xb0),
             '▒' => Some(0xb1),
             '▓' => Some(0xb2),
@@ -327,7 +347,7 @@ fn board() -> &'static Grid {
 /// Rows of a CP437 character, 8 pixels wide (bit 7 left), 16 tall.
 pub type Glyph = [u8; 16];
 
-fn glyphs() -> &'static [Glyph; 256] {
+pub fn glyphs() -> &'static [Glyph; 256] {
     static G: OnceLock<[Glyph; 256]> = OnceLock::new();
     G.get_or_init(|| {
         let mut out = [[0u8; 16]; 256];
@@ -478,8 +498,9 @@ fn draw_cell(canvas: &mut Canvas, col: usize, row: usize, cell: Cell) {
 /// return the canvas rows drawn.
 pub fn render(canvas: &mut Canvas, grid: &Grid, prev: Option<&Grid>) -> Option<(i32, i32)> {
     let mut rows: Option<(usize, usize)> = None;
-    for row in 0..ROWS {
-        for col in 0..COLS {
+    let prev = prev.filter(|p| p.cols == grid.cols && p.rows == grid.rows);
+    for row in 0..grid.rows.min((canvas.h / CH).max(0) as usize) {
+        for col in 0..grid.cols.min((canvas.w / CW).max(0) as usize) {
             let cell = grid.get(col, row);
             if prev.is_some_and(|p| p.get(col, row) == cell) {
                 continue;
@@ -489,6 +510,23 @@ pub fn render(canvas: &mut Canvas, grid: &Grid, prev: Option<&Grid>) -> Option<(
         }
     }
     rows.map(|(a, b)| (a as i32 * CH, b as i32 * CH))
+}
+
+/// Draw the cells of `grid` in `cols` and `rows` again, whatever the
+/// canvas shows there now.
+pub fn render_area(
+    canvas: &mut Canvas,
+    grid: &Grid,
+    cols: std::ops::Range<usize>,
+    rows: std::ops::Range<usize>,
+) {
+    let max_rows = (canvas.h / CH).max(0) as usize;
+    let max_cols = (canvas.w / CW).max(0) as usize;
+    for row in rows.filter(|&r| r < grid.rows.min(max_rows)) {
+        for col in cols.clone().filter(|&c| c < grid.cols.min(max_cols)) {
+            draw_cell(canvas, col, row, grid.get(col, row));
+        }
+    }
 }
 
 // ---- the call ----------------------------------------------------------------------
@@ -610,14 +648,20 @@ pub struct Motd {
 impl Motd {
     /// A quote in quotation marks over at most four lines, or `None` when
     /// it does not fit.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn quote(words: &str, who: &str) -> Option<Self> {
+        Self::quote_in(words, who, at::MOTD_WIDTH, at::MOTD_LINES)
+    }
+
+    /// [`Motd::quote`] for a box `width` columns wide and `max` lines tall.
+    pub fn quote_in(words: &str, who: &str, width: usize, max: usize) -> Option<Self> {
         let words = words.trim().trim_matches(['"', '\u{201c}', '\u{201d}']);
         let text = format!(
             "\"{}\"",
             words.split_whitespace().collect::<Vec<_>>().join(" ")
         );
-        let lines = wrap(&text, at::MOTD_WIDTH);
-        (lines.len() <= at::MOTD_LINES && !words.is_empty()).then(|| Self {
+        let lines = wrap(&text, width);
+        (lines.len() <= max && !words.is_empty()).then(|| Self {
             lines,
             who: who
                 .trim()
@@ -627,17 +671,23 @@ impl Motd {
     }
 
     /// A quote cut to four lines.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn cut(words: &str, who: &str) -> Self {
+        Self::cut_in(words, who, at::MOTD_WIDTH, at::MOTD_LINES).unwrap_or_else(Self::welcome)
+    }
+
+    /// [`Motd::cut`] for a box `width` columns wide and `max` lines tall.
+    pub fn cut_in(words: &str, who: &str, width: usize, max: usize) -> Option<Self> {
         let long = format!("{} ", words.trim());
         let mut text = String::new();
         for word in long.split_whitespace() {
             let next = format!("{text} {word}");
-            if wrap(&format!("\"{}...\"", next.trim()), at::MOTD_WIDTH).len() > at::MOTD_LINES {
+            if wrap(&format!("\"{}...\"", next.trim()), width).len() > max {
                 break;
             }
             text = next;
         }
-        Self::quote(&format!("{}...", text.trim()), who).unwrap_or_else(Self::welcome)
+        Self::quote_in(&format!("{}...", text.trim()), who, width, max)
     }
 
     /// Without quotes.
@@ -747,7 +797,7 @@ pub fn compose(phase: Phase, f: &Facts) -> Grid {
         }
         Phase::Stream(n) => {
             let full = online(f);
-            g.0[..n].copy_from_slice(&full.0[..n]);
+            g.cells[..n].copy_from_slice(&full.cells[..n]);
             if n < COLS * ROWS {
                 g.set(n % COLS, n / COLS, Cell { ch: b'_', ..BLANK });
             }
@@ -899,6 +949,30 @@ pub fn byline(who: &str, max: usize) -> String {
     format!("{}...", cut.trim_end())
 }
 
+/// A message of the day from the quotes for a box `width` columns wide and
+/// `max` lines tall: the first of up to eight quotes that fits, otherwise
+/// the first one cut to fit. `None` without quotes.
+pub(crate) fn pick_quote(
+    visual: &mut crate::visual::Visual,
+    width: usize,
+    max: usize,
+) -> Option<Motd> {
+    let mut first = None;
+    for _ in 0..8 {
+        let Some(q) = visual.next_quote() else {
+            break;
+        };
+        let words = q.lines.join(" ");
+        let who = q.attribution.join(", ");
+        if let Some(m) = Motd::quote_in(&words, &who, width, max) {
+            return Some(m);
+        }
+        first.get_or_insert((words, who));
+    }
+    let (words, who) = first?;
+    Motd::cut_in(&words, &who, width, max)
+}
+
 /// "00:12" for so many seconds.
 pub fn hours_minutes(seconds: u64) -> String {
     format!("{:02}:{:02}", (seconds / 3600).min(99), seconds / 60 % 60)
@@ -963,29 +1037,13 @@ impl Lock {
         if self.bbs.quoted {
             return;
         }
-        let Some(visual) = self.visual.as_mut() else {
-            if self.bbs.motd.is_none() {
-                self.bbs.motd = Some(Motd::welcome());
-            }
-            return;
-        };
-        let mut first = None;
-        for _ in 0..8 {
-            let Some(q) = visual.next_quote() else {
-                break;
-            };
-            let words = q.lines.join(" ");
-            let who = q.attribution.join(", ");
-            if let Some(m) = Motd::quote(&words, &who) {
+        let picked = self
+            .visual
+            .as_mut()
+            .and_then(|v| pick_quote(v, at::MOTD_WIDTH, at::MOTD_LINES));
+        match picked {
+            Some(m) => {
                 self.bbs.motd = Some(m);
-                self.bbs.quoted = true;
-                return;
-            }
-            first.get_or_insert((words, who));
-        }
-        match first {
-            Some((words, who)) => {
-                self.bbs.motd = Some(Motd::cut(&words, &who));
                 self.bbs.quoted = true;
             }
             None => {
@@ -1325,7 +1383,7 @@ mod tests {
     #[test]
     fn every_character_used_has_a_drawn_glyph() {
         let fallback = make_glyph(0x01);
-        let mut used: Vec<u8> = board().0.iter().map(|c| c.ch).collect();
+        let mut used: Vec<u8> = board().cells.iter().map(|c| c.ch).collect();
         used.extend(codes("♫ ·│┤├─░▒▓█"));
         used.sort_unstable();
         used.dedup();

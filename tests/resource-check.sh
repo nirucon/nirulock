@@ -260,3 +260,39 @@ printf 'bbs online: nirulock %s%% CPU, %s distinct frames of 5\n' "$rest_cpu" "$
 awk -v c="$rest_cpu" 'BEGIN { exit !(c <= 0.5) }' || fail "bbs CPU above 0.5% at rest"
 kill -0 "$LOCK" || fail "the lock exited"
 printf 'PASS: the bbs board arrives and then rests\n'
+
+# The hacker layout: the console boots, opens its panes and then stays calm
+# (a few small parts change four times a second); with reduced motion it
+# keeps still.
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+printf 'layout = "hacker"\n' > "$TEST/config/niruui/lock.toml"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-hacker.log" 2>&1 & LOCK=$!
+sleep 1
+kill -0 "$LOCK" || { cat "$TEST/lock-hacker.log"; exit 1; }
+boot_cpu=$(cpu "$LOCK" 3)
+boot_frames=$(frames)
+printf 'hacker boot: nirulock %s%% CPU, %s distinct frames of 5\n' "$boot_cpu" "$boot_frames"
+[ "$boot_frames" -ge 2 ] || fail "the hacker boot did not show"
+awk -v c="$boot_cpu" 'BEGIN { exit !(c <= 3.0) }' || fail "hacker CPU above 3% while booting"
+sleep 4
+rest_cpu=$(cpu "$LOCK" 10)
+rest_frames=$(frames)
+printf 'hacker console: nirulock %s%% CPU, %s distinct frames of 5\n' "$rest_cpu" "$rest_frames"
+[ "$rest_frames" -ge 2 ] || fail "the hacker console did not move"
+awk -v c="$rest_cpu" 'BEGIN { exit !(c <= 0.8) }' || fail "hacker CPU above 0.8% at rest"
+kill -0 "$LOCK" || fail "the lock exited"
+kill "$LOCK"; wait "$LOCK" 2>/dev/null || :; LOCK=
+mkdir -p "$TEST/config/niruwm"
+printf 'schema = 1\n[motion]\nreduced = true\n' > "$TEST/config/niruwm/appearance.toml"
+PULSE_SERVER=unix:$TEST/no-server "$BIN" > "$TEST/lock-hacker.log" 2>&1 & LOCK=$!
+sleep 2
+kill -0 "$LOCK" || { cat "$TEST/lock-hacker.log"; exit 1; }
+still_cpu=$(cpu "$LOCK" 6)
+still_frames=$(frames)
+printf 'hacker reduced: nirulock %s%% CPU, %s distinct frames of 5\n' "$still_cpu" "$still_frames"
+# Two when the clock turns a minute in between.
+[ "$still_frames" -le 2 ] || fail "the hacker console moved with reduced motion"
+awk -v c="$still_cpu" 'BEGIN { exit !(c <= 0.3) }' || fail "hacker CPU above 0.3% with reduced motion"
+rm -f "$TEST/config/niruwm/appearance.toml"
+kill -0 "$LOCK" || fail "the lock exited"
+printf 'PASS: the hacker console boots, stays calm, and keeps still with reduced motion\n'
